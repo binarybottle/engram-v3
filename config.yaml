@@ -5,7 +5,7 @@
 # Data Settings
 #-----------------------------------------------------------------------
 data:
-  bigram_scores_file: "input/estimated_bigram_scores.csv"
+  bigram_scores_file: "data/estimated_bigram_scores.csv"
   output_dir: "output/layouts"
 
 #-----------------------------------------------------------------------

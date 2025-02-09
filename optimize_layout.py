@@ -1,208 +1,239 @@
 from itertools import permutations
-import heapq
+from multiprocessing import Pool, cpu_count
+from math import factorial
+from tqdm import tqdm
+import numpy as np
+import psutil
+import itertools
 from typing import List, Dict, Tuple, Optional
+import time
+from datetime import timedelta
 import pandas as pd
 import yaml
-import logging
-import argparse
 from pathlib import Path
-from input.bigram_frequencies_english import (
+import multiprocessing
+from data.bigram_frequencies_english import (
     bigrams, bigram_frequencies,
     onegrams, onegram_frequencies
 )
 
-class Config:
-    """Configuration class for layout optimization."""
-    def __init__(self, config_path: str):
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
-            
-        # Set up paths
-        self.output_dir = Path(self.config['data']['output_dir'])
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Set up logging
-        self._setup_logging()
+def load_config(config_path: str = 'config.yaml') -> dict:
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+def get_comfort_scores(config: dict = None) -> Dict[Tuple[str, str], float]:
+    """Load comfort scores from CSV file."""
+    if config is None:
+        config = load_config()
     
-    def _setup_logging(self):
-        """Configure logging based on settings."""
-        log_config = self.config['logging']
-        log_file = Path(log_config['file'])
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        logging.basicConfig(
-            level=getattr(logging, log_config['level']),
-            format=log_config['format'],
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-            ]
-        )
+    scores_file = Path(config['data']['bigram_scores_file'])
+    df = pd.read_csv(scores_file)
+    comfort_scores = {}
+    for _, row in df.iterrows():
+        bigram = (row['first_char'], row['second_char'])
+        comfort_scores[bigram] = row['comfort_score']
+    return comfort_scores
 
-class LayoutOptimizer:
-    def __init__(self, config: Config):
-        self.config = config
-        self.logger = logging.getLogger(__name__)
-        self.comfort_scores = self._load_comfort_scores()
-        
-        # Load layout settings
-        layout_config = config.config['layout']
-        self.right_positions = layout_config['right_positions']
-        self.left_positions = layout_config['left_positions']
-        self.position_mappings = layout_config['position_mappings']['right_to_left']
+def print_keyboard_layout(positions: Dict[str, str], title: str = "Layout"):
+    """Print a visual representation of the keyboard layout."""
+    layout_template = """
+╭───────────────────────────────────────────────╮
+│ Layout: {title:<34}    │
+├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┤
+│  Q  │  W  │  E  │  R  ║  U  │  I  │  O  │  P  │
+│ {q:^3} │ {w:^3} │ {e:^3} │ {r:^3} ║ {u:^3} │ {i:^3} │ {o:^3} │ {p:^3} │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│  A  │  S  │  D  │  F  ║  J  │  K  │  L  │  ;  │
+│ {a:^3} │ {s:^3} │ {d:^3} │ {f:^3} ║ {j:^3} │ {k:^3} │ {l:^3} │ {sc:^3} │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│  Z  │  X  │  C  │  V  ║  M  │  ,  │  .  │  /  │
+│ {z:^3} │ {x:^3} │ {c:^3} │ {v:^3} ║ {m:^3} │ {cm:^3} │ {dt:^3} │ {sl:^3} │
+╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
+"""
+    # Create a dictionary for all possible positions, with spaces as defaults
+    layout_chars = {
+        'q': ' ', 'w': ' ', 'e': ' ', 'r': ' ',
+        'u': ' ', 'i': ' ', 'o': ' ', 'p': ' ',
+        'a': ' ', 's': ' ', 'd': ' ', 'f': ' ',
+        'j': ' ', 'k': ' ', 'l': ' ', 'sc': ' ',
+        'z': ' ', 'x': ' ', 'c': ' ', 'v': ' ',
+        'm': ' ', 'cm': ' ', 'dt': ' ', 'sl': ' '
+    }
+    
+    # Convert special characters in positions to their keys in layout_chars
+    position_conversion = {
+        ',': 'cm',
+        '.': 'dt',
+        '/': 'sl',
+        ';': 'sc'
+    }
+    
+    # Update with provided positions, converting special characters
+    for pos, letter in positions.items():
+        layout_key = position_conversion.get(pos, pos)
+        layout_chars[layout_key] = letter.upper()
+    
+    # Print the layout
+    print(layout_template.format(title=title, **layout_chars))
 
-    def _load_comfort_scores(self) -> Dict[Tuple[str, str], float]:
-        """Load comfort scores from CSV file."""
-        scores_file = Path(self.config.config['data']['bigram_scores_file'])
-        df = pd.read_csv(scores_file)
-        return {(row['first_char'], row['second_char']): row['comfort_score'] 
-                for _, row in df.iterrows()}
+def get_available_memory():
+    """Get available system memory in bytes."""
+    return psutil.virtual_memory().available
 
-    def get_top_consonants(self, n: int) -> str:
-        """Get the N most frequent consonants."""
-        consonants = [c for c in 'bcdfghjklmnpqrstvwxz']
-        consonant_freqs = {c: onegram_frequencies.get(c, 0) for c in consonants}
-        
-        self.logger.info("\nConsonant frequencies:")
-        for c, freq in sorted(consonant_freqs.items(), key=lambda x: x[1], reverse=True):
-            self.logger.info(f"{c}: {freq:.6f}")
-            
-        return ''.join(sorted(consonants, key=lambda x: consonant_freqs[x], reverse=True)[:n])
+def estimate_memory_per_perm(letters: str, positions: str) -> int:
+    """Estimate memory needed per permutation in bytes."""
+    perm_size = len(positions) * 2  # tuple of position strings
+    bigram_size = len(letters) * len(letters) * 20  # bigram scores dict
+    return perm_size + bigram_size + 100  # add overhead
 
-    def score_permutation(self, letters: str, positions: List[str]) -> Tuple[float, Dict[str, float]]:
-        """Score a permutation by frequency-weighted comfort of letter transitions."""
-        position_map = dict(zip(letters, positions))
+def process_chunk(args):
+    """Process a chunk of permutations in parallel."""
+    perms_chunk, letters, comfort_scores = args
+    results = []
+    
+    # Convert numpy array to list if it's a numpy array
+    if isinstance(perms_chunk, np.ndarray):
+        perms_chunk = perms_chunk.tolist()
+    
+    # Right-to-left position mapping for scoring
+    right_to_left = {
+        'u': 'r', 'i': 'e', 'o': 'w', 'p': 'q',  # Top row
+        'j': 'f', 'k': 'd', 'l': 's', ';': 'a',  # Home row
+        'm': 'v', ',': 'c', '.': 'x', '/': 'z'   # Bottom row
+    }
+    
+    for pos_perm in perms_chunk:
+        # Convert tuple elements to strings if they're numpy string types
+        pos_perm = tuple(str(p) for p in pos_perm)
+        position_map = dict(zip(letters, pos_perm))
         total_score = 0
         bigram_scores = {}
         
-        # For each possible letter pair
         for l1 in letters:
             for l2 in letters:
                 if l1 != l2:
                     bigram = f"{l1}{l2}"
                     freq = bigram_frequencies.get(bigram, 0)
                     
-                    # Get assigned positions
                     pos1, pos2 = position_map[l1], position_map[l2]
                     
                     # Map right-side positions to left-side equivalents
-                    if pos1 in self.right_positions:
-                        pos1 = self.position_mappings[pos1]
-                    if pos2 in self.right_positions:
-                        pos2 = self.position_mappings[pos2]
+                    pos1 = right_to_left.get(pos1, pos1)
+                    pos2 = right_to_left.get(pos2, pos2)
                     
-                    # Get comfort score
-                    comfort = self.comfort_scores.get((pos1, pos2), float('-inf'))
+                    comfort = comfort_scores.get((pos1, pos2), float('-inf'))
                     weighted_score = freq * comfort
                     bigram_scores[bigram] = weighted_score
                     total_score += weighted_score
-                    
-        return total_score, bigram_scores
+        
+        results.append((total_score, pos_perm, bigram_scores))
+    
+    # Sort and return as list
+    return sorted(results, key=lambda x: x[0], reverse=True)[:3]
 
-    def find_best_placements(self, letters: str, positions: List[str], top_n: int) -> List[Tuple[float, List[str], Dict[str, float]]]:
-        """Find optimal placements for letters."""
-        self.logger.info(f"\nSearching for best placements of letters {letters}")
-        self.logger.info(f"Available positions: {positions}")
-        
-        best_placements = []
-        count = 0
-        
-        for pos_perm in permutations(positions, len(letters)):
-            weighted_score, bigram_scores = self.score_permutation(letters, pos_perm)
-            
-            if len(best_placements) < top_n:
-                heapq.heappush(best_placements, (weighted_score, pos_perm, bigram_scores))
-            elif weighted_score > best_placements[0][0]:
-                heapq.heappop(best_placements)
-                heapq.heappush(best_placements, (weighted_score, pos_perm, bigram_scores))
-            
-            count += 1
-            if count % 1000000 == 0:
-                self.logger.info(f"Evaluated {count} permutations...")
+def optimize_letter_placement(
+    letters: str,
+    positions: str,
+    top_n: int = 3,
+    comfort_scores: Optional[Dict[Tuple[str, str], float]] = None,
+    n_processes: int = None,
+    memory_fraction: float = 0.7
+) -> List[Tuple[float, List[str], Dict[str, float]]]:
+    """Memory-optimized version of letter placement optimization."""
+    if n_processes is None:
+        n_processes = cpu_count() - 1
+
+    # Calculate total permutations
+    total_perms = factorial(len(positions)) // factorial(len(positions) - len(letters))
+    
+    # Calculate memory requirements
+    available_memory = get_available_memory()
+    memory_to_use = int(available_memory * memory_fraction)
+    mem_per_perm = estimate_memory_per_perm(letters, positions)
+    max_perms_in_memory = memory_to_use // mem_per_perm
+    
+    # Calculate estimated time
+    estimated_time_per_perm = 0.000001  # 1 microsecond per permutation (estimate)
+    estimated_total_seconds = total_perms * estimated_time_per_perm / n_processes  # Adjust for parallel processing
+    
+    print(f"\nOptimizing placement for letters: {letters}")
+    print(f"Available positions: {positions}")
+    print(f"Will return top {top_n} placements")
+    print(f"Total permutations to evaluate: {total_perms:,}")
+    print(f"Using {n_processes} processes")
+    print(f"Available memory: {available_memory / (1024**3):.1f} GB")
+    print(f"Memory per permutation: {mem_per_perm / 1024:.1f} KB")
+    print(f"Max permutations in memory: {max_perms_in_memory:,}")
+    print(f"Estimated time: {timedelta(seconds=int(estimated_total_seconds))}")
+    
+    if comfort_scores is None:
+        comfort_scores = get_comfort_scores()
+    
+    start_time = time.time()
+    best_placements = []
+    perms_iterator = permutations(positions, len(letters))
+    batch_size = min(max_perms_in_memory, total_perms)
+    num_batches = (total_perms + batch_size - 1) // batch_size
+    
+    with Pool(n_processes) as pool:
+        for batch_num in range(num_batches):
+            batch_perms = list(itertools.islice(perms_iterator, batch_size))
+            if not batch_perms:
+                break
                 
-        return sorted(best_placements, reverse=True)
+            chunks = np.array_split(batch_perms, n_processes)
+            chunk_args = [(chunk, letters, comfort_scores) for chunk in chunks]
+            
+            print(f"\nProcessing batch {batch_num + 1}/{num_batches}")
+            with tqdm(total=len(chunks), desc="Processing chunks") as pbar:
+                for chunk_results in pool.imap_unordered(process_chunk, chunk_args):
+                    best_placements.extend(chunk_results)
+                    best_placements.sort(reverse=True)
+                    best_placements = best_placements[:top_n]
+                    pbar.update(1)
+                    
+                    # Update time estimate
+                    elapsed = time.time() - start_time
+                    progress = (batch_num * len(chunks) + pbar.n) / (num_batches * len(chunks))
+                    if progress > 0:
+                        remaining = (elapsed / progress) - elapsed
+                        pbar.set_postfix({'ETA': str(timedelta(seconds=int(remaining)))})
+    
+    elapsed = time.time() - start_time
+    print(f"\nTotal time: {timedelta(seconds=int(elapsed))}")
+    
+    # Print results
+    print("\nTop placements:")
+    for i, (score, positions, bigram_scores) in enumerate(best_placements, 1):
+        print(f"\nPlacement {i}:")
+        layout = dict(zip(positions, letters))
+        print_keyboard_layout(layout, f"Score: {score:.4f}")
+        
+        print("\nTop contributing bigrams:")
+        sorted_bigrams = sorted(bigram_scores.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
+        for bigram, score in sorted_bigrams:
+            if score != 0:
+                print(f"{bigram}: {score:.6f}")
+    
+    return best_placements
 
-    def optimize_consonant_layout(self) -> List[Tuple[float, List[str], Dict[str, float]]]:
-        """Optimize consonant placement on the left side."""
-        consonant_config = self.config.config['optimization']['consonants']
-        num_consonants = consonant_config['num_consonants']
-        top_n = consonant_config['top_n']
-        
-        consonants = self.get_top_consonants(num_consonants)
-        self.logger.info(f"Optimizing placement for consonants: {consonants}")
-        
-        return self.find_best_placements(consonants, self.left_positions, top_n)
-
-    def optimize_vowel_layout(self) -> List[Tuple[float, List[str], Dict[str, float]]]:
-        """Optimize vowel placement on the right side."""
-        vowel_config = self.config.config['optimization']['vowels']
-        vowels = vowel_config['letters']
-        top_n = vowel_config['top_n']
-        
-        self.logger.info(f"Optimizing placement for vowels: {vowels}")
-        
-        return self.find_best_placements(vowels, self.right_positions, top_n)
-
-    def print_keyboard_layout(self, positions: Dict[str, str], title: str = "Layout"):
-        """Print visual keyboard layout."""
-        template = self.config.config['visualization']['keyboard_template']
-        
-        # Create layout chars dictionary with spaces as defaults
-        layout_chars = {
-            'q': ' ', 'w': ' ', 'e': ' ', 'r': ' ',
-            'u': ' ', 'i': ' ', 'o': ' ', 'p': ' ',
-            'a': ' ', 's': ' ', 'd': ' ', 'f': ' ',
-            'j': ' ', 'k': ' ', 'l': ' ', 'sc': ' ',
-            'z': ' ', 'x': ' ', 'c': ' ', 'v': ' ',
-            'm': ' ', 'cm': ' ', 'dt': ' ', 'sl': ' '
-        }
-        
-        # Fill in the positions from the layout
-        for pos, letter in positions.items():
-            if pos in layout_chars:
-                layout_chars[pos] = letter.upper()
-            elif pos == ';':
-                layout_chars['sc'] = letter.upper()
-            elif pos == ',':
-                layout_chars['cm'] = letter.upper()
-            elif pos == '.':
-                layout_chars['dt'] = letter.upper()
-            elif pos == '/':
-                layout_chars['sl'] = letter.upper()
-        
-        # Print the layout
-        print(template.format(title=title, **layout_chars))
-
-def main():
-    parser = argparse.ArgumentParser(description='Optimize keyboard layout.')
-    parser.add_argument('--config', default='config.yaml', help='Path to config file')
-    args = parser.parse_args()
-    
-    # Initialize configuration and optimizer
-    config = Config(args.config)
-    optimizer = LayoutOptimizer(config)
-    
-    # Optimize consonants first
-    consonant_results = optimizer.optimize_consonant_layout()
-    consonants = optimizer.get_top_consonants(len(consonant_results[0][1]))
-    
-    # Optimize vowels
-    vowel_results = optimizer.optimize_vowel_layout()
-    vowels = config.config['optimization']['vowels']['letters']
-    
-    # Create layout mapping
-    layout = {}
-    
-    # Map consonants
-    for letter, pos in zip(consonants, consonant_results[0][1]):
-        layout[pos] = letter
-    
-    # Map vowels
-    for letter, pos in zip(vowels[:len(vowel_results[0][1])], vowel_results[0][1]):
-        layout[pos] = letter
-    
-    # Print final layout
-    optimizer.print_keyboard_layout(layout, "Optimized Layout")
 
 if __name__ == "__main__":
-    main()
+
+    # total_perms = factorial(len(positions)) // factorial(len(positions) - len(letters))
+    # number of cores (sysctl -n hw.ncpu): 14 -- use 14-1 cores 
+    # E, T, A, O, I, N, S, R, H, L, D, C / U, M, F, P, G, W, Y, B, V, K, X, J
+    print(f"Number of CPU cores: {multiprocessing.cpu_count()}")
+    ncores = multiprocessing.cpu_count() - 1
+
+    config = load_config()
+    results = optimize_letter_placement(
+        "etaoinsrhldc",
+        "qwerasdf;uiopjkl;",
+        top_n=3,
+        n_processes=ncores,
+        memory_fraction=0.7,
+        comfort_scores=get_comfort_scores(config)  # Pass comfort scores with config
+    )
+
