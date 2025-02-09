@@ -1,0 +1,67 @@
+# engram-v3/config.yaml
+# Configuration file for keyboard layout optimization, controlling the entire pipeline.
+
+#-----------------------------------------------------------------------
+# Data Settings
+#-----------------------------------------------------------------------
+data:
+  bigram_scores_file: "input/estimated_bigram_scores.csv"
+  output_dir: "output/layouts"
+
+#-----------------------------------------------------------------------
+# Layout Settings
+#-----------------------------------------------------------------------
+layout:
+  right_positions: ['u', 'i', 'o', 'p', 'j', 'k', 'l', ';', 'm', ',', '.', '/']
+  left_positions: ['q', 'w', 'e', 'r', 'a', 's', 'd', 'f', 'z', 'x', 'c', 'v']
+  position_mappings:
+    right_to_left:
+      u: 'r'
+      i: 'e'
+      o: 'w'
+      p: 'q'
+      j: 'f'
+      k: 'd'
+      l: 's'
+      ';': 'a'
+      m: 'v'
+      ',': 'c'
+      '.': 'x'
+      '/': 'z'
+
+#-----------------------------------------------------------------------
+# Optimization Settings
+#-----------------------------------------------------------------------
+optimization:
+  consonants:
+    num_consonants: 6  # Number of most frequent consonants to optimize
+    top_n: 3          # Number of top placements to return
+  vowels:
+    letters: "aeiouy"  # Vowels to optimize
+    top_n: 3          # Number of top placements to return
+
+#-----------------------------------------------------------------------
+# Visualization Settings
+#-----------------------------------------------------------------------
+visualization:
+  keyboard_template: |
+    ╭───────────────────────────────────────────────╮
+    │ Layout: {title:<34}    │
+    ├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┤
+    │  Q  │  W  │  E  │  R  ║  U  │  I  │  O  │  P  │
+    │ {q:^3} │ {w:^3} │ {e:^3} │ {r:^3} ║ {u:^3} │ {i:^3} │ {o:^3} │ {p:^3} │
+    ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+    │  A  │  S  │  D  │  F  ║  J  │  K  │  L  │  ;  │
+    │ {a:^3} │ {s:^3} │ {d:^3} │ {f:^3} ║ {j:^3} │ {k:^3} │ {l:^3} │ {sc:^3} │
+    ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+    │  Z  │  X  │  C  │  V  ║  M  │  ,  │  .  │  /  │
+    │ {z:^3} │ {x:^3} │ {c:^3} │ {v:^3} ║ {m:^3} │ {cm:^3} │ {dt:^3} │ {sl:^3} │
+    ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
+
+#-----------------------------------------------------------------------
+# Logging Settings
+#-----------------------------------------------------------------------
+logging:
+  level: "INFO"
+  file: "output/logs/layout_optimization.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
