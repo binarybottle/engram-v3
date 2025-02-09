@@ -40,14 +40,12 @@ class Config:
         )
 
 class LayoutOptimizer:
-    """Main class for keyboard layout optimization."""
-    
     def __init__(self, config: Config):
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.comfort_scores = self._load_comfort_scores()
         
-        # Load layout settings from config
+        # Load layout settings
         layout_config = config.config['layout']
         self.right_positions = layout_config['right_positions']
         self.left_positions = layout_config['left_positions']
@@ -61,37 +59,56 @@ class LayoutOptimizer:
                 for _, row in df.iterrows()}
 
     def get_top_consonants(self, n: int) -> str:
-        """Get top n most frequent consonants."""
-        consonants = sorted(
-            [(c, freq) for c, freq in onegram_frequencies.items() 
-             if c.isalpha() and c.lower() not in 'aeiou'],
-            key=lambda x: x[1],
-            reverse=True
-        )
-        return ''.join(c for c, _ in consonants[:n])
+        """Get the N most frequent consonants."""
+        consonants = [c for c in 'bcdfghjklmnpqrstvwxz']
+        consonant_freqs = {c: onegram_frequencies.get(c, 0) for c in consonants}
+        
+        self.logger.info("\nConsonant frequencies:")
+        for c, freq in sorted(consonant_freqs.items(), key=lambda x: x[1], reverse=True):
+            self.logger.info(f"{c}: {freq:.6f}")
+            
+        return ''.join(sorted(consonants, key=lambda x: consonant_freqs[x], reverse=True)[:n])
+
+    def score_permutation(self, letters: str, positions: List[str]) -> Tuple[float, Dict[str, float]]:
+        """Score a permutation by frequency-weighted comfort of letter transitions."""
+        position_map = dict(zip(letters, positions))
+        total_score = 0
+        bigram_scores = {}
+        
+        # For each possible letter pair
+        for l1 in letters:
+            for l2 in letters:
+                if l1 != l2:
+                    bigram = f"{l1}{l2}"
+                    freq = bigram_frequencies.get(bigram, 0)
+                    
+                    # Get assigned positions
+                    pos1, pos2 = position_map[l1], position_map[l2]
+                    
+                    # Map right-side positions to left-side equivalents
+                    if pos1 in self.right_positions:
+                        pos1 = self.position_mappings[pos1]
+                    if pos2 in self.right_positions:
+                        pos2 = self.position_mappings[pos2]
+                    
+                    # Get comfort score
+                    comfort = self.comfort_scores.get((pos1, pos2), float('-inf'))
+                    weighted_score = freq * comfort
+                    bigram_scores[bigram] = weighted_score
+                    total_score += weighted_score
+                    
+        return total_score, bigram_scores
 
     def find_best_placements(self, letters: str, positions: List[str], top_n: int) -> List[Tuple[float, List[str], Dict[str, float]]]:
-        """Find the best placements for given letters in given positions."""
-        self.logger.info(f"Searching for best placements of letters {letters}")
+        """Find optimal placements for letters."""
+        self.logger.info(f"\nSearching for best placements of letters {letters}")
         self.logger.info(f"Available positions: {positions}")
         
         best_placements = []
         count = 0
         
         for pos_perm in permutations(positions, len(letters)):
-            weighted_score = 0
-            bigram_scores = {}
-            
-            # Calculate score for this permutation
-            for i, letter in enumerate(letters):
-                pos = pos_perm[i]
-                for other_letter in letters:
-                    bigram = (letter, other_letter)
-                    if bigram in bigram_frequencies:
-                        score = (bigram_frequencies[bigram] * 
-                                self.comfort_scores.get((pos, self.position_mappings.get(pos, pos)), 0))
-                        weighted_score += score
-                        bigram_scores[bigram] = score
+            weighted_score, bigram_scores = self.score_permutation(letters, pos_perm)
             
             if len(best_placements) < top_n:
                 heapq.heappush(best_placements, (weighted_score, pos_perm, bigram_scores))
@@ -102,7 +119,7 @@ class LayoutOptimizer:
             count += 1
             if count % 1000000 == 0:
                 self.logger.info(f"Evaluated {count} permutations...")
-        
+                
         return sorted(best_placements, reverse=True)
 
     def optimize_consonant_layout(self) -> List[Tuple[float, List[str], Dict[str, float]]]:
@@ -140,19 +157,21 @@ class LayoutOptimizer:
             'm': ' ', 'cm': ' ', 'dt': ' ', 'sl': ' '
         }
         
-        # Convert special characters
-        special_chars = {';': 'sc', ',': 'cm', '.': 'dt', '/': 'sl'}
-        
-        # Update layout with provided positions
+        # Fill in the positions from the layout
         for pos, letter in positions.items():
-            layout_key = special_chars.get(pos, pos)
-            layout_chars[layout_key] = letter.upper()
+            if pos in layout_chars:
+                layout_chars[pos] = letter.upper()
+            elif pos == ';':
+                layout_chars['sc'] = letter.upper()
+            elif pos == ',':
+                layout_chars['cm'] = letter.upper()
+            elif pos == '.':
+                layout_chars['dt'] = letter.upper()
+            elif pos == '/':
+                layout_chars['sl'] = letter.upper()
         
         # Print the layout
-        print(template.format(
-            title=title,
-            **layout_chars
-        ))
+        print(template.format(title=title, **layout_chars))
 
 def main():
     parser = argparse.ArgumentParser(description='Optimize keyboard layout.')
@@ -163,28 +182,26 @@ def main():
     config = Config(args.config)
     optimizer = LayoutOptimizer(config)
     
-    # Optimize consonants
+    # Optimize consonants first
     consonant_results = optimizer.optimize_consonant_layout()
-    optimizer.logger.info("Top consonant placements:")
-    for score, placement, details in consonant_results:
-        optimizer.logger.info(f"Score: {score:.2f}, Placement: {placement}")
+    consonants = optimizer.get_top_consonants(len(consonant_results[0][1]))
     
     # Optimize vowels
     vowel_results = optimizer.optimize_vowel_layout()
-    optimizer.logger.info("Top vowel placements:")
-    for score, placement, details in vowel_results:
-        optimizer.logger.info(f"Score: {score:.2f}, Placement: {placement}")
+    vowels = config.config['optimization']['vowels']['letters']
     
-    # Create and print best layout
-    best_consonant_placement = consonant_results[0][1]
-    best_vowel_placement = vowel_results[0][1]
-    
+    # Create layout mapping
     layout = {}
-    for i, letter in enumerate(best_consonant_placement):
-        layout[letter] = optimizer.left_positions[i]
-    for i, letter in enumerate(best_vowel_placement):
-        layout[letter] = optimizer.right_positions[i]
     
+    # Map consonants
+    for letter, pos in zip(consonants, consonant_results[0][1]):
+        layout[pos] = letter
+    
+    # Map vowels
+    for letter, pos in zip(vowels[:len(vowel_results[0][1])], vowel_results[0][1]):
+        layout[pos] = letter
+    
+    # Print final layout
     optimizer.print_keyboard_layout(layout, "Optimized Layout")
 
 if __name__ == "__main__":
