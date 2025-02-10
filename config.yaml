@@ -6,39 +6,53 @@
 #-----------------------------------------------------------------------
 data:
   bigram_scores_file: "data/estimated_bigram_scores.csv"
+  key_scores_file: "data/estimated_key_scores.csv"
   output_dir: "output/layouts"
-
-#-----------------------------------------------------------------------
-# Layout Settings
-#-----------------------------------------------------------------------
-layout:
-  right_positions: ['u', 'i', 'o', 'p', 'j', 'k', 'l', ';', 'm', ',', '.', '/']
-  left_positions: ['q', 'w', 'e', 'r', 'a', 's', 'd', 'f', 'z', 'x', 'c', 'v']
-  position_mappings:
-    right_to_left:
-      u: 'r'
-      i: 'e'
-      o: 'w'
-      p: 'q'
-      j: 'f'
-      k: 'd'
-      l: 's'
-      ';': 'a'
-      m: 'v'
-      ',': 'c'
-      '.': 'x'
-      '/': 'z'
 
 #-----------------------------------------------------------------------
 # Optimization Settings
 #-----------------------------------------------------------------------
 optimization:
-  consonants:
-    num_consonants: 6  # Number of most frequent consonants to optimize
-    top_n: 3          # Number of top placements to return
-  vowels:
-    letters: "aeiouy"  # Vowels to optimize
-    top_n: 3          # Number of top placements to return
+  letters: "etao"  # Letters to arrange
+  keys: "dfjk"  # Qwerty keys to arrange letters
+  scoring:
+    bigram_frequency_weight: 0.25  # Weight for bigram frequency scores
+    letter_frequency_weight: 0.25  # Weight for letter frequency scores
+    comfort_weight: 0.5    # Weight for comfort scores
+
+#-----------------------------------------------------------------------
+# Layout Settings
+#-----------------------------------------------------------------------
+layout:
+  # Define the keyboard positions
+  positions:
+    right:
+      top: ['u', 'i', 'o', 'p']
+      home: ['j', 'k', 'l', ';']
+      bottom: ['m', ',', '.', '/']
+    left:
+      top: ['q', 'w', 'e', 'r']
+      home: ['a', 's', 'd', 'f']
+      bottom: ['z', 'x', 'c', 'v']
+  
+  # Define position equivalence mappings  
+  position_mappings:
+    right_to_left:
+      # Top row
+      'u': 'r'
+      'i': 'e'
+      'o': 'w'
+      'p': 'q'
+      # Home row
+      'j': 'f'
+      'k': 'd'
+      'l': 's'
+      ';': 'a'
+      # Bottom row
+      'm': 'v'
+      ',': 'c'
+      '.': 'x'
+      '/': 'z'
 
 #-----------------------------------------------------------------------
 # Visualization Settings
