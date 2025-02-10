@@ -2,12 +2,14 @@
 # Configuration file for keyboard layout optimization, controlling the entire pipeline.
 
 #-----------------------------------------------------------------------
-# Data Settings
+# Paths
 #-----------------------------------------------------------------------
-data:
-  two_key_comfort_scores_file: "data/estimated_bigram_scores.csv"
-  one_key_comfort_scores_file: "data/estimated_key_scores.csv"
-  output_dir: "output/layouts"
+paths:
+  input:
+    two_key_comfort_scores_file: "input/estimated_bigram_scores.csv"
+    one_key_comfort_scores_file: "input/estimated_key_scores.csv"
+  output:
+    layout_results_folder: "output/layouts"
 
 #-----------------------------------------------------------------------
 # Optimization Settings
@@ -73,10 +75,3 @@ visualization:
     │ {z:^3} │ {x:^3} │ {c:^3} │ {v:^3} ║ {m:^3} │ {cm:^3} │ {dt:^3} │ {sl:^3} │
     ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-#-----------------------------------------------------------------------
-# Logging Settings
-#-----------------------------------------------------------------------
-logging:
-  level: "INFO"
-  file: "output/logs/layout_optimization.log"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
