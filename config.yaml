@@ -5,8 +5,8 @@
 # Data Settings
 #-----------------------------------------------------------------------
 data:
-  bigram_scores_file: "data/estimated_bigram_scores.csv"
-  key_scores_file: "data/estimated_key_scores.csv"
+  two_key_comfort_scores_file: "data/estimated_bigram_scores.csv"
+  one_key_comfort_scores_file: "data/estimated_key_scores.csv"
   output_dir: "output/layouts"
 
 #-----------------------------------------------------------------------
@@ -14,11 +14,12 @@ data:
 #-----------------------------------------------------------------------
 optimization:
   letters: "etao"  # Letters to arrange
-  keys: "dfjk"  # Qwerty keys to arrange letters
-  scoring:
+  keys: "dfjk"     # Qwerty keys to arrange letters
+  scoring:  
     bigram_frequency_weight: 0.25  # Weight for bigram frequency scores
     letter_frequency_weight: 0.25  # Weight for letter frequency scores
     comfort_weight: 0.5    # Weight for comfort scores
+  nlayouts: 3      # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Layout Settings
