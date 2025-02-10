@@ -79,13 +79,10 @@ def is_same_side(pos1: str, pos2: str) -> bool:
     
     return same_side
 
-def get_comfort_scores(config: dict = None) -> Tuple[Dict[Tuple[str, str], float], Dict[str, float]]:
-    """Load and process comfort scores for key positions and individual keys."""
+def get_comfort_scores(config: dict = None) -> Dict[Tuple[str, str], float]:
+    """Load and process comfort scores for key positions."""
     if config is None:
         config = load_config()
-    
-    print("\nLoading and Processing Comfort Scores:")
-    print("=====================================")
     
     # Load raw bigram scores from CSV
     scores_file = Path(config['data']['bigram_scores_file'])
@@ -95,23 +92,12 @@ def get_comfort_scores(config: dict = None) -> Tuple[Dict[Tuple[str, str], float
         bigram = (row['first_char'], row['second_char'])
         raw_bigram_scores[bigram] = row['comfort_score']
     
-    print("\nSample Bigram Scores (Raw):")
-    print("-------------------------")
-    sample_bigrams = list(raw_bigram_scores.items())[:5]
-    for bigram, score in sample_bigrams:
-        print(f"Bigram {bigram[0]}{bigram[1]}: {score:.4f}")
-    
     # Load raw key scores from CSV
     key_scores_file = Path(config['data']['key_scores_file'])
     key_df = pd.read_csv(key_scores_file)
     raw_key_scores = {}
     for _, row in key_df.iterrows():
         raw_key_scores[row['key']] = row['comfort_score']
-    
-    print("\nIndividual Key Scores (Raw):")
-    print("-------------------------")
-    for key, score in raw_key_scores.items():
-        print(f"Key {key}: {score:.4f}")
     
     # Get keyboard sides and position mappings
     right_keys = set()
@@ -123,18 +109,15 @@ def get_comfort_scores(config: dict = None) -> Tuple[Dict[Tuple[str, str], float
     # Get right-to-left mappings
     right_to_left = config['layout']['position_mappings']['right_to_left']
     
-    print("\nMapping Examples:")
-    print("---------------")
-    print("Right to Left mappings:")
-    for right, left in right_to_left.items():
-        print(f"{right} -> {left}")
+    # Normalize scores to 0-1 range where 1 is best (least negative)
+    min_score = min(min(raw_bigram_scores.values()), min(raw_key_scores.values()))
+    max_score = max(max(raw_bigram_scores.values()), max(raw_key_scores.values()))
+    
+    def normalize_score(score):
+        return 1 - ((score - max_score) / (min_score - max_score))
     
     # Create position-based comfort scores
     position_scores = {}
-    
-    # Track some examples for debugging
-    same_side_examples = []
-    alternating_examples = []
     
     # For each pair of positions
     for pos1 in (right_keys | left_keys):
@@ -155,47 +138,34 @@ def get_comfort_scores(config: dict = None) -> Tuple[Dict[Tuple[str, str], float
                         lookup_pos2 = pos2
                     
                     # Try both directions for the comfort score
-                    score = raw_bigram_scores.get((lookup_pos1, lookup_pos2),
-                           raw_bigram_scores.get((lookup_pos2, lookup_pos1), 0.0))
+                    raw_score = max(
+                        raw_bigram_scores.get((lookup_pos1, lookup_pos2), float('-inf')),
+                        raw_bigram_scores.get((lookup_pos2, lookup_pos1), float('-inf'))
+                    )
+                    if raw_score == float('-inf'):
+                        print(f"Warning: No bigram score found for {lookup_pos1},{lookup_pos2}")
+                        raw_score = 0
                     
-                    position_scores[(pos1, pos2)] = score
-                    
-                    # Save example for debugging
-                    if len(same_side_examples) < 5:
-                        same_side_examples.append((pos1, pos2, score, lookup_pos1, lookup_pos2))
+                    position_scores[(pos1, pos2)] = normalize_score(raw_score)
                 else:
                     # For alternating hands, use the average of individual key scores
                     pos1_lookup = right_to_left[pos1] if pos1_right else pos1
                     pos2_lookup = right_to_left[pos2] if pos2_right else pos2
                     
-                    key1_score = raw_key_scores[pos1_lookup]
-                    key2_score = raw_key_scores[pos2_lookup]
-                    avg_score = (key1_score + key2_score) / 2
-                    position_scores[(pos1, pos2)] = avg_score
+                    # Get and normalize individual key scores
+                    score1 = normalize_score(raw_key_scores[pos1_lookup])
+                    score2 = normalize_score(raw_key_scores[pos2_lookup])
                     
-                    # Save example for debugging
-                    if len(alternating_examples) < 5:
-                        alternating_examples.append((pos1, pos2, avg_score, key1_score, key2_score))
+                    # Average the normalized scores
+                    position_scores[(pos1, pos2)] = (score1 + score2) / 2
     
-    print("\nSample Same-Side Scoring:")
-    print("----------------------")
-    for pos1, pos2, score, lookup1, lookup2 in same_side_examples:
-        print(f"Positions {pos1},{pos2} (mapped from {lookup1},{lookup2}): {score:.4f}")
+    # Print score summaries for verification
+    print("\nScore summary:")
+    print(f"Bigram scores range: {min(raw_bigram_scores.values()):.4f} to {max(raw_bigram_scores.values()):.4f}")
+    print(f"Key scores range: {min(raw_key_scores.values()):.4f} to {max(raw_key_scores.values()):.4f}")
+    print(f"Normalized scores range: {min(position_scores.values()):.4f} to {max(position_scores.values()):.4f}")
     
-    print("\nSample Alternating-Hands Scoring:")
-    print("------------------------------")
-    for pos1, pos2, avg_score, score1, score2 in alternating_examples:
-        print(f"Positions {pos1},{pos2}: {avg_score:.4f} (average of {score1:.4f} and {score2:.4f})")
-    
-    # Print score ranges
-    all_scores = list(position_scores.values())
-    print("\nScore Ranges:")
-    print("------------")
-    print(f"Min score: {min(all_scores):.4f}")
-    print(f"Max score: {max(all_scores):.4f}")
-    print(f"Mean score: {sum(all_scores)/len(all_scores):.4f}")
-    
-    return position_scores, raw_key_scores
+    return position_scores
 
 def get_comfort_value(pos1: str, pos2: str, normalized_comfort: Dict[Tuple[str, str], float], 
                      right_keys: set, left_keys: set, config: dict) -> Tuple[float, bool]:
@@ -213,24 +183,12 @@ def get_comfort_value(pos1: str, pos2: str, normalized_comfort: Dict[Tuple[str, 
         pos1_lookup = right_to_left[pos1] if pos1_right else pos1
         pos2_lookup = right_to_left[pos2] if pos2_right else pos2
         
-        # Get the individual key scores and normalize them
-        with open(config['data']['key_scores_file']) as f:
-            key_df = pd.read_csv(f)
-            key_scores = dict(zip(key_df['key'], key_df['comfort_score']))
+        # Get raw scores from the preloaded normalized_comfort scores
+        score1 = normalized_comfort.get((pos1_lookup, pos1_lookup), 0)  # Use self-bigram as key score
+        score2 = normalized_comfort.get((pos2_lookup, pos2_lookup), 0)
         
-        # Get raw scores
-        score1 = key_scores.get(pos1_lookup, 0)
-        score2 = key_scores.get(pos2_lookup, 0)
-        
-        # Normalize both scores to 0-1 range where 1 is best (least negative)
-        min_score = min(key_scores.values())
-        max_score = max(key_scores.values())
-        score1_norm = 1 - ((score1 - max_score) / (min_score - max_score))
-        score2_norm = 1 - ((score2 - max_score) / (min_score - max_score))
-        
-        # Average the normalized scores and boost alternating advantage
-        alternating_bonus = 0.2  # Additional bonus for alternating hands
-        return min(1.0, (score1_norm + score2_norm) / 2 + alternating_bonus), False
+        # Simply average the two position scores
+        return (score1 + score2) / 2, False
         
     # For same side, use the bigram comfort mapping
     # If on right side, map to left side equivalents
@@ -574,11 +532,11 @@ def optimize_letter_placement(
 
     # Load comfort scores if not provided
     if comfort_scores is None:
-        comfort_scores, key_scores = get_comfort_scores(config)
+        comfort_scores = get_comfort_scores(config)
 
     # Normalize scores
     normalized_comfort, normalized_bigram_frequencies, normalized_letter_frequencies = normalize_scores(
-        comfort_scores, bigram_frequencies, onegram_frequencies
+        comfort_scores, bigram_frequencies, onegram_frequencies  # Pass just the comfort_scores
     )
 
     # Calculate total permutations for progress bar
@@ -667,7 +625,7 @@ if __name__ == "__main__":
         # Run optimization
         print(f"\nStarting optimization...")
         start_time = time.time()
-        comfort_scores, key_scores = get_comfort_scores(config)
+        comfort_scores = get_comfort_scores(config)
         
         results = optimize_letter_placement(
             letters=letters,
@@ -752,7 +710,7 @@ if __name__ == "__main__":
         # Run optimization
         print(f"\nStarting optimization...")
         start_time = time.time()
-        comfort_scores, key_scores = get_comfort_scores(config)
+        comfort_scores = get_comfort_scores(config)
         
         results = optimize_letter_placement(
             letters=letters,
