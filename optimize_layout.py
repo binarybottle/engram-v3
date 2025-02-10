@@ -206,10 +206,33 @@ def get_comfort_value(pos1: str, pos2: str, normalized_comfort: Dict[Tuple[str, 
     same_side = (pos1_right and pos2_right) or ((pos1 in left_keys) and (pos2 in left_keys))
     
     if not same_side:
-        # For alternating hands, return a higher comfort score
-        return 1.0, False
+        # For alternating hands, calculate score based on individual key comfort
+        right_to_left = config['layout']['position_mappings']['right_to_left']
         
-    # For same side, use the existing bigram comfort mapping
+        # Map each position to its left-side equivalent for scoring
+        pos1_lookup = right_to_left[pos1] if pos1_right else pos1
+        pos2_lookup = right_to_left[pos2] if pos2_right else pos2
+        
+        # Get the individual key scores and normalize them
+        with open(config['data']['key_scores_file']) as f:
+            key_df = pd.read_csv(f)
+            key_scores = dict(zip(key_df['key'], key_df['comfort_score']))
+        
+        # Get raw scores
+        score1 = key_scores.get(pos1_lookup, 0)
+        score2 = key_scores.get(pos2_lookup, 0)
+        
+        # Normalize both scores to 0-1 range where 1 is best (least negative)
+        min_score = min(key_scores.values())
+        max_score = max(key_scores.values())
+        score1_norm = 1 - ((score1 - max_score) / (min_score - max_score))
+        score2_norm = 1 - ((score2 - max_score) / (min_score - max_score))
+        
+        # Average the normalized scores and boost alternating advantage
+        alternating_bonus = 0.2  # Additional bonus for alternating hands
+        return min(1.0, (score1_norm + score2_norm) / 2 + alternating_bonus), False
+        
+    # For same side, use the bigram comfort mapping
     # If on right side, map to left side equivalents
     if pos1_right:
         right_to_left = config['layout']['position_mappings']['right_to_left']
