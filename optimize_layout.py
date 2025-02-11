@@ -15,16 +15,16 @@ import pandas as pd
 import numpy as np
 import yaml
 from typing import List, Dict, Set, Tuple
-from itertools import permutations, islice
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
 from math import factorial, comb, perm
 from tqdm import tqdm
 import psutil
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 import numba
 from numba import jit, float64, boolean
 import heapq
+import csv
 
 from input.bigram_frequencies_english import (
     bigrams, bigram_frequencies_array,
@@ -153,6 +153,22 @@ def load_and_normalize_frequencies(onegrams: str,
     
     return norm_letter_freqs, norm_bigram_freqs
 
+def validate_input(letters: str, keys: str) -> None:
+    """
+    Validate input parameters.
+    """
+    # Check for duplicates in letters
+    if len(set(letters)) != len(letters):
+        raise ValueError(f"Duplicate letters: {letters}")
+    
+    # Check for duplicates in keys
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"Duplicate keys: {keys}")
+    
+    # Check that we have enough positions
+    if len(letters) > len(keys):
+        raise ValueError(f"More letters ({len(letters)}) than available positions ({len(keys)})")
+
 def prepare_arrays(
     letters: str,
     keys: str,
@@ -163,14 +179,16 @@ def prepare_arrays(
     norm_letter_freqs: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Prepare input arrays for the numba-optimized scoring function.
+    Modified to handle N<M case.
     """
-    n = len(letters)
+    n_letters = len(letters)
+    n_positions = len(keys)
     
     # Create key position array (1 for right side, 0 for left side)
     key_LR = np.array([1 if k in right_keys else 0 for k in keys], dtype=np.int8)
     
-    # Create comfort score matrix
-    comfort_matrix = np.zeros((n, n), dtype=np.float64)
+    # Create comfort score matrix for all possible positions
+    comfort_matrix = np.zeros((n_positions, n_positions), dtype=np.float64)
     for i, k1 in enumerate(keys):
         for j, k2 in enumerate(keys):
             if i == j:
@@ -181,8 +199,8 @@ def prepare_arrays(
     # Create letter frequency array
     letter_freqs = np.array([norm_letter_freqs.get(l, 0.0) for l in letters], dtype=np.float64)
     
-    # Create bigram frequency matrix
-    bigram_freqs = np.zeros((n, n), dtype=np.float64)
+    # Create bigram frequency matrix for letters only
+    bigram_freqs = np.zeros((n_letters, n_letters), dtype=np.float64)
     for i, l1 in enumerate(letters):
         for j, l2 in enumerate(letters):
             bigram_freqs[i, j] = norm_bigram_freqs.get((l1, l2), 0.0)
@@ -195,9 +213,6 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
     """
     Save layout results to a CSV file.
     """
-    import csv
-    from datetime import datetime
-    
     # Generate timestamp and set output file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = os.path.join(config['paths']['output']['layout_results_folder'], 
@@ -208,6 +223,7 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
         
         # Write header with configuration info
         writer.writerow(['Letters', config['optimization']['letters']])
+        writer.writerow(['Available Positions', config['optimization']['keys']])
         writer.writerow(['Keys', config['optimization']['keys']])
         writer.writerow(['Bigram weight', config['optimization']['scoring']['bigram_weight']])
         writer.writerow(['Letter weight', config['optimization']['scoring']['letter_weight']])
@@ -216,6 +232,7 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
         # Write results header
         writer.writerow([
             'Arrangement',
+            'Positions',
             'Rank',
             'Total score',
             'Bigram score',
@@ -229,7 +246,7 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
         # Write results
         for rank, (score, mapping, detailed_scores) in enumerate(results, 1):
             arrangement = "".join(mapping.keys())
-            #positions = "".join(mapping.values())
+            positions = "".join(mapping.values())
            
             # Get first bigram score and letter score (they're the same for all entries)
             first_entry = next(iter(detailed_scores.values()))
@@ -258,6 +275,7 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
 
             writer.writerow([
                 arrangement,
+                positions,    
                 rank,
                 f"{score:.4f}",
                 f"{bigram_score:.4f}",
@@ -343,6 +361,57 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
 #-----------------------------------------------------------------------------
 # Optimizing functions (with numba)
 #-----------------------------------------------------------------------------
+def calculate_memory_upper_bound(n_letters: int, n_positions: int) -> dict:
+    """
+    Calculate worst-case memory requirements.
+    """
+    # Fixed sizes in bytes
+    INT32_SIZE = 4
+    INT8_SIZE = 1
+    FLOAT64_SIZE = 8
+    BOOL_SIZE = 1
+    
+    # Core arrays (these are fixed)
+    mapping_size = n_letters * INT32_SIZE
+    comfort_matrix_size = n_positions * n_positions * FLOAT64_SIZE
+    freq_matrix_size = n_letters * n_letters * FLOAT64_SIZE
+    letter_freq_size = n_letters * FLOAT64_SIZE
+    key_lr_size = n_positions * INT8_SIZE
+    
+    # Size of each candidate in queue
+    bytes_per_candidate = (
+        mapping_size +    # partial_mapping array
+        FLOAT64_SIZE +   # score
+        INT32_SIZE +     # depth
+        n_positions * BOOL_SIZE  # used positions array
+    )
+    
+    # Worst case: store candidates for every possible partial assignment
+    # At each depth d, we could have P(n_positions, d) candidates
+    max_queue_size = 0
+    candidates_by_depth = []
+    for depth in range(n_letters):
+        candidates_at_depth = perm(n_positions, depth + 1)
+        max_queue_size += candidates_at_depth
+        candidates_by_depth.append(candidates_at_depth)
+    
+    # Total memory
+    queue_memory = max_queue_size * bytes_per_candidate
+    core_memory = comfort_matrix_size + freq_matrix_size + letter_freq_size + key_lr_size
+    total_memory = queue_memory + core_memory
+    
+    return {
+        'total_bytes': total_memory,
+        'total_gb': total_memory / (1024**3),
+        'queue_size': max_queue_size,
+        'candidates_by_depth': candidates_by_depth,
+        'breakdown': {
+            'core_arrays_mb': core_memory / (1024**2),
+            'queue_mb': queue_memory / (1024**2),
+            'bytes_per_candidate': bytes_per_candidate
+        }
+    }
+
 def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidates: int) -> dict:
     """
     Estimate memory requirements.
@@ -550,31 +619,35 @@ def branch_and_bound_optimal(
     keys: str,
     arrays: tuple,
     weights: tuple,
-    n_solutions: int = 5,  # Number of solutions to keep
+    n_solutions: int = 5,
     max_candidates: int = 1000,
     memory_threshold_gb: float = 0.9
 ) -> List[Tuple[float, Dict[str, str], Dict]]:
     """
-    Branch and bound implementation that maintains top N solutions.
-    Uses a min-heap to track the N best solutions found so far.
+    Branch and bound implementation that handles both N=M and N<M cases efficiently.
     """
     n_letters = len(letters)
     n_positions = len(keys)
+    is_full_layout = n_letters == n_positions
+    
     key_LR, comfort_matrix, letter_freqs, bigram_freqs = arrays
     bigram_weight, letter_weight = weights
     
-    # Search candidates priority queue
-    candidates = []
+    # Calculate total nodes for progress tracking
+    total_nodes = 0
+    for depth in range(n_letters):
+        # For each letter, count number of positions we could place it in
+        positions_available = n_positions - depth
+        total_nodes += positions_available
     
-    # Min-heap for top N solutions (using negatives for max-heap behavior)
+    candidates = []
     top_n_solutions = []
     worst_top_n_score = float('-inf')
     
-    # Initial empty mapping
+    # Initial state
     initial_mapping = np.full(n_letters, -1, dtype=np.int32)
     initial_used = np.zeros(n_positions, dtype=bool)
     
-    # Get initial score
     score_tuple = calculate_layout_score_numba(
         initial_mapping, key_LR, comfort_matrix,
         bigram_freqs, letter_freqs, bigram_weight, letter_weight
@@ -582,11 +655,6 @@ def branch_and_bound_optimal(
     initial_score = score_tuple[0]
     
     heapq.heappush(candidates, (-initial_score, 0, initial_mapping, initial_used))
-    
-    # Calculate total nodes for progress tracking
-    total_nodes = 0
-    for depth in range(n_letters):
-        total_nodes += perm(n_positions, depth + 1)
     
     processed_nodes = 0
     start_time = time.time()
@@ -600,12 +668,9 @@ def branch_and_bound_optimal(
             neg_score, depth, mapping, used = heapq.heappop(candidates)
             score = -neg_score
             
-            # Only prune if we have N solutions and this branch can't beat our worst
             if len(top_n_solutions) >= n_solutions and score <= worst_top_n_score:
-                # Count skipped nodes
                 remaining_levels = n_letters - depth
-                skipped_nodes = sum(perm(n_positions - depth, d + 1) 
-                                  for d in range(remaining_levels))
+                skipped_nodes = sum(n_positions - d for d in range(depth, depth + remaining_levels))
                 pbar.update(skipped_nodes)
                 processed_nodes += skipped_nodes
                 continue
@@ -617,12 +682,8 @@ def branch_and_bound_optimal(
                 )
                 total_score, bigram_score, letter_score = score_tuple
                 
-                # Add to top N if either:
-                # 1. We haven't found N solutions yet, or
-                # 2. This solution is better than our worst solution
                 if (len(top_n_solutions) < n_solutions or 
                     total_score > worst_top_n_score):
-                    # Create solution record
                     solution = (
                         total_score,
                         bigram_score,
@@ -630,27 +691,16 @@ def branch_and_bound_optimal(
                         mapping.copy()
                     )
                     
-                    # Add to min-heap (using negative score for max-heap behavior)
                     heapq.heappush(top_n_solutions, (-total_score, solution))
                     
-                    # If we have too many solutions, remove the worst one
                     if len(top_n_solutions) > n_solutions:
                         heapq.heappop(top_n_solutions)
                     
-                    # Update worst score (it's the root of our min-heap)
                     if top_n_solutions:
                         worst_top_n_score = -top_n_solutions[0][0]
                 
                 pbar.update(1)
                 processed_nodes += 1
-                
-                # Update ETA
-                elapsed = time.time() - start_time
-                if elapsed > 0:
-                    nodes_per_second = processed_nodes / elapsed
-                    remaining_nodes = total_nodes - processed_nodes
-                    eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else 0
-                    pbar.set_postfix({'ETA': str(timedelta(seconds=int(eta_seconds)))})
                 continue
             
             # Try each available position
@@ -668,7 +718,6 @@ def branch_and_bound_optimal(
                     )
                     new_score = score_tuple[0]
                     
-                    # Only add if this branch could produce a top-N solution
                     if (len(top_n_solutions) < n_solutions or 
                         new_score > worst_top_n_score):
                         heapq.heappush(candidates, (-new_score, depth + 1, new_mapping, new_used))
@@ -676,23 +725,16 @@ def branch_and_bound_optimal(
             
             pbar.update(nodes_at_depth)
             processed_nodes += nodes_at_depth
-            
-            # Update ETA
-            elapsed = time.time() - start_time
-            if elapsed > 0:
-                nodes_per_second = processed_nodes / elapsed
-                remaining_nodes = total_nodes - processed_nodes
-                eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else 0
-                pbar.set_postfix({'ETA': str(timedelta(seconds=int(eta_seconds)))})
     
-    # Convert heap to sorted list of solutions
+    # Convert solutions
     solutions = []
     while top_n_solutions:
         _, solution = heapq.heappop(top_n_solutions)
         total_score, bigram_score, letter_score, mapping = solution
+        letter_mapping = dict(zip(letters, [keys[i] for i in mapping]))
         solutions.append((
             total_score,
-            dict(zip(letters, [keys[i] for i in mapping])),
+            letter_mapping,
             {'total': {
                 'total_score': total_score,
                 'bigram_score': bigram_score,
@@ -700,22 +742,48 @@ def branch_and_bound_optimal(
             }}
         ))
     
-    # Return solutions in descending score order
     return list(reversed(solutions))
 
 def optimize_layout(config: dict) -> None:
     """
-    Main optimization function with improved memory reporting
+    Main optimization function with improved arrangement counting and validation.
     """
+    letters = config['optimization']['letters']
+    positions = config['optimization']['keys']
+    
+    # Validate input
+    validate_input(letters, positions)
+    
+    is_full_layout = len(letters) == len(positions)
+    
+    # Calculate total arrangements correctly
+    if is_full_layout:
+        total_arrangements = perm(len(positions), len(letters))
+    else:
+        # Total arrangements = Ways to choose positions * Ways to arrange letters in chosen positions
+        positions_choices = comb(len(positions), len(letters))
+        letter_arrangements = factorial(len(letters))
+        total_arrangements = positions_choices * letter_arrangements
+    
+    print(f"Letters to arrange:      {letters.upper()}")
+    print(f"Available positions:     {positions.upper()}")
+    print(f"Layout type:            {'Full (N=M)' if is_full_layout else 'Partial (N<M)'}")
+    print(f"Total arrangements:     {total_arrangements:,}")
+    if not is_full_layout:
+        print(f"  - Position choices:    {positions_choices:,}")
+        print(f"  - Letter arrangements: {letter_arrangements:,}")
+    print(f"Number of processes:    {cpu_count() - 1}")
+    
+    # Show initial keyboard
+    visualize_keyboard_layout(None, "Keys to optimize", config)
+    
     # Load and normalize scores
     norm_2key_scores, norm_1key_scores = load_and_normalize_comfort_scores(config)
     norm_letter_freqs, norm_bigram_freqs = load_and_normalize_frequencies(
         onegrams, onegram_frequencies_array, bigrams, bigram_frequencies_array
     )
     
-    # Get configuration parameters
-    letters = config['optimization']['letters']
-    keys = config['optimization']['keys']
+    # Get scoring weights
     bigram_weight = config['optimization']['scoring']['bigram_weight']
     letter_weight = config['optimization']['scoring']['letter_weight']
     
@@ -724,33 +792,9 @@ def optimize_layout(config: dict) -> None:
     for row in ['top', 'home', 'bottom']:
         right_keys.update(config['layout']['positions']['right'][row])
     
-    # Check memory requirements first
-    memory_estimate = estimate_memory_requirements(len(letters), len(keys), 1000)
-    total_kb = memory_estimate['estimated_bytes'] / 1024
-    available_gb = memory_estimate['available_memory_gb']
-    
-    print("\nMemory Requirement Estimation:")
-    if total_kb < 1024:  # Less than 1 MB
-        print(f"Estimated memory usage: {total_kb:.2f} KB")
-    else:
-        print(f"Estimated memory usage: {total_kb/1024:.2f} MB")
-    print(f"Available system memory: {available_gb:.2f} GB")
-    print(f"Memory sufficient: {memory_estimate['memory_sufficient']}")
-    
-    print("\nDetailed Memory Breakdown:")
-    for key, value in memory_estimate['details'].items():
-        kb_value = value * 1024  # Convert MB to KB
-        if kb_value < 1:
-            print(f"{key}: {kb_value*1024:.2f} bytes")
-        else:
-            print(f"{key}: {kb_value:.2f} KB")
-    
-    if not memory_estimate['memory_sufficient']:
-        raise MemoryError("Insufficient memory available for optimization")
-
-    # Prepare arrays for optimization
+    # Prepare arrays and run optimization
     arrays = prepare_arrays(
-        letters, keys, right_keys,
+        letters, positions, right_keys,
         norm_2key_scores, norm_1key_scores,
         norm_bigram_freqs, norm_letter_freqs
     )
@@ -759,16 +803,16 @@ def optimize_layout(config: dict) -> None:
     # Get number of layouts from config
     n_layouts = config['optimization'].get('nlayouts', 5)
     
-    # Run optimization with n_solutions parameter
+    # Run optimization
     results = branch_and_bound_optimal(
         letters=letters,
-        keys=keys,
+        keys=positions,
         arrays=arrays,
         weights=weights,
         n_solutions=n_layouts
     )
     
-    # Sort results by total score (descending)
+    # Sort and save results
     sorted_results = sorted(
         results,
         key=lambda x: (
@@ -778,8 +822,7 @@ def optimize_layout(config: dict) -> None:
         ),
         reverse=True
     )
- 
-    # Process results (no need to slice anymore)
+    
     print_top_results(sorted_results, config)
     save_results_to_csv(sorted_results, config)
 
@@ -788,27 +831,12 @@ def optimize_layout(config: dict) -> None:
 #--------------------------------------------------------------------
 if __name__ == "__main__":
     try:
+        start_time = time.time()
+
         # Load configuration
         config = load_config('config.yaml')
     
-        # Show initial keyboard with positions to fill
-        visualize_keyboard_layout(None, "Keys to optimize", config)
-
-        # Print optimization parameters
-        letters = config['optimization']['letters']
-        positions = config['optimization']['keys']
-        total_perms = factorial(len(positions)) // factorial(len(positions) - len(letters))
-        n_processes = cpu_count() - 1
-        print(f"Letters to arrange:      {letters.upper()}")
-        print(f"Available positions:     {positions.upper()}")
-        print(f"Total permutations:     {total_perms:,}")
-        print(f"Number of processes:    {n_processes}")
-        
-        #--------------------------
         # Optimize the layout
-        #--------------------------
-        start_time = time.time()
-
         optimize_layout(config)
 
         elapsed = time.time() - start_time
