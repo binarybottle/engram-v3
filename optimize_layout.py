@@ -38,8 +38,8 @@ def load_and_normalize_comfort_scores(config: dict) -> Tuple[Dict[Tuple[str, str
     key_min = key_df['comfort_score'].min()
     key_max = key_df['comfort_score'].max()
     
-    print("\nComfort score normalization:")
-    print(f"Key comfort range: min={key_min:.4f}, max={key_max:.4f}")
+    #print("\nComfort score normalization:")
+    #print(f"Key comfort range: min={key_min:.4f}, max={key_max:.4f}")
 
     # Create normalized bigram comfort scores dictionary
     norm_bigram_scores = {}
@@ -66,7 +66,7 @@ def load_and_normalize_comfort_scores(config: dict) -> Tuple[Dict[Tuple[str, str
         # Add left hand key
         key = row['key']
         norm_key_scores[key] = norm_score
-        print(f"Key {key}: raw={row['comfort_score']:.4f}, normalized={norm_score:.4f}")
+        #print(f"Key {key}: raw={row['comfort_score']:.4f}, normalized={norm_score:.4f}")
         
         # Mirror to right hand if key has right-hand equivalent
         if key in left_to_right:
@@ -94,8 +94,8 @@ def load_and_normalize_frequencies(onegrams: str,
         for k, v in letter_freqs.items()
     }
 
-    print("\nLetter frequency normalization:")
-    print(f"Raw freq range: min={min_letter_freq:.4f}, max={max(letter_freqs.values()):.4f}")
+    #print("\nLetter frequency normalization:")
+    #print(f"Raw freq range: min={min_letter_freq:.4f}, max={max(letter_freqs.values()):.4f}")
 
     # Normalize letter frequencies to 0-1
     letter_min = min(log_letter_freqs.values())
@@ -105,9 +105,9 @@ def load_and_normalize_frequencies(onegrams: str,
         for k, v in log_letter_freqs.items()
     }
     
-    print(f"Log freq range: min={letter_min:.4f}, max={letter_max:.4f}")
-    print(f"Letter e: raw={letter_freqs['e']:.4f}, log={log_letter_freqs['e']:.4f}, norm={norm_letter_freqs['e']:.4f}")
-    print(f"Letter z: raw={letter_freqs['z']:.4f}, log={log_letter_freqs['z']:.4f}, norm={norm_letter_freqs['z']:.4f}")
+    #print(f"Log freq range: min={letter_min:.4f}, max={letter_max:.4f}")
+    #print(f"Letter e: raw={letter_freqs['e']:.4f}, log={log_letter_freqs['e']:.4f}, norm={norm_letter_freqs['e']:.4f}")
+    #print(f"Letter z: raw={letter_freqs['z']:.4f}, log={log_letter_freqs['z']:.4f}, norm={norm_letter_freqs['z']:.4f}")
 
     # Create and normalize bigram frequencies
     bigram_freqs = dict(zip(bigrams, bigram_frequencies_array))
