@@ -38,11 +38,14 @@ def load_and_normalize_comfort_scores(config: dict) -> Tuple[Dict[Tuple[str, str
     key_min = key_df['comfort_score'].min()
     key_max = key_df['comfort_score'].max()
     
+    print("\nComfort score normalization:")
+    print(f"Key comfort range: min={key_min:.4f}, max={key_max:.4f}")
+
     # Create normalized bigram comfort scores dictionary
     norm_bigram_scores = {}
     for _, row in bigram_df.iterrows():
-        # Normalize score (flip so 1.0 is most comfortable)
-        norm_score = 1 - ((row['comfort_score'] - bigram_min) / (bigram_max - bigram_min))
+        # Normalize score
+        norm_score = (row['comfort_score'] - bigram_min) / (bigram_max - bigram_min)
         
         # Add left hand bigrams
         key1, key2 = row['first_char'], row['second_char']
@@ -57,12 +60,13 @@ def load_and_normalize_comfort_scores(config: dict) -> Tuple[Dict[Tuple[str, str
     # Create normalized single key comfort scores dictionary
     norm_key_scores = {}
     for _, row in key_df.iterrows():
-        # Normalize score (flip so 1.0 is most comfortable)
-        norm_score = 1 - ((row['comfort_score'] - key_min) / (key_max - key_min))
-        
+        # Normalize score
+        norm_score = (row['comfort_score'] - key_min) / (key_max - key_min)
+
         # Add left hand key
         key = row['key']
         norm_key_scores[key] = norm_score
+        print(f"Key {key}: raw={row['comfort_score']:.4f}, normalized={norm_score:.4f}")
         
         # Mirror to right hand if key has right-hand equivalent
         if key in left_to_right:
@@ -89,7 +93,10 @@ def load_and_normalize_frequencies(onegrams: str,
         k: np.log10(v if v > 0 else min_letter_freq) 
         for k, v in letter_freqs.items()
     }
-    
+
+    print("\nLetter frequency normalization:")
+    print(f"Raw freq range: min={min_letter_freq:.4f}, max={max(letter_freqs.values()):.4f}")
+
     # Normalize letter frequencies to 0-1
     letter_min = min(log_letter_freqs.values())
     letter_max = max(log_letter_freqs.values())
@@ -98,6 +105,10 @@ def load_and_normalize_frequencies(onegrams: str,
         for k, v in log_letter_freqs.items()
     }
     
+    print(f"Log freq range: min={letter_min:.4f}, max={letter_max:.4f}")
+    print(f"Letter e: raw={letter_freqs['e']:.4f}, log={log_letter_freqs['e']:.4f}, norm={norm_letter_freqs['e']:.4f}")
+    print(f"Letter z: raw={letter_freqs['z']:.4f}, log={log_letter_freqs['z']:.4f}, norm={norm_letter_freqs['z']:.4f}")
+
     # Create and normalize bigram frequencies
     bigram_freqs = dict(zip(bigrams, bigram_frequencies_array))
     
@@ -129,7 +140,8 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
     
     # Generate timestamp and set output file
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.join(config['paths']['output']['layout_results_folder'], f"layout_results_{timestamp}.csv")
+    output_path = os.path.join(config['paths']['output']['layout_results_folder'], 
+                              f"layout_results_{timestamp}.csv")
     
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f)
@@ -138,55 +150,60 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
         writer.writerow(['Configuration'])
         writer.writerow(['Letters', config['optimization']['letters']])
         writer.writerow(['Keys', config['optimization']['keys']])
-        writer.writerow(['Bigram Frequency Weight', config['optimization']['scoring']['bigram_frequency_weight']])
-        writer.writerow(['Letter Frequency Weight', config['optimization']['scoring']['letter_frequency_weight']])
-        writer.writerow(['Comfort Weight', config['optimization']['scoring']['comfort_weight']])
+        writer.writerow(['Bigram weight', config['optimization']['scoring']['bigram_weight']])
+        writer.writerow(['Letter weight', config['optimization']['scoring']['letter_weight']])
         writer.writerow([])  # Empty row for separation
         
         # Write results header
         writer.writerow([
-            'Letters',
-            'Keys',
+            'Arrangement',
             'Rank',
             'Total score',
-            'Avg bigram component score',
-            'Avg key component score',
-            'Avg 2-key comfort score (both directions)',
-            'Avg 1-key comfort score',
-            'Avg bigram frequency score (both directions)',
-            'Avg 1-gram frequency score'
+            'Bigram score',
+            'Letter score',
+            'Avg 2-key comfort',
+            'Avg 2-gram frequency',
+            'Avg 1-key comfort',
+            'Avg 1-gram frequency'
         ])
         
         # Write results
         for rank, (score, mapping, detailed_scores) in enumerate(results, 1):
             arrangement = "".join(mapping.keys())
-            positions = "".join(mapping.values())
-            
-            # Calculate component scores
-            avg_bigram_score = np.mean([d['bigram_addend'] for d in detailed_scores.values()])
-            avg_key_score = np.mean([d['key_addend'] for d in detailed_scores.values()])
+            #positions = "".join(mapping.values())
 
-            avg_2key_comfort_score1 = np.mean([d['components']['comfort_seq1'] for d in detailed_scores.values()])
-            avg_2key_comfort_score2 = np.mean([d['components']['comfort_seq2'] for d in detailed_scores.values()])
+            # Component scores
+            comfort_scores1 = [d['components']['comfort_seq1'] for d in detailed_scores.values()]
+            comfort_scores2 = [d['components']['comfort_seq2'] for d in detailed_scores.values()]
+            avg_2key_comfort_score1 = np.mean(comfort_scores1)
+            avg_2key_comfort_score2 = np.mean(comfort_scores2)
             avg_2key_comfort_score = (avg_2key_comfort_score1 + avg_2key_comfort_score2) / 2
 
-            avg_bigram_freq_score1 = np.mean([d['components']['freq_seq1'] for d in detailed_scores.values()])
-            avg_bigram_freq_score2 = np.mean([d['components']['freq_seq2'] for d in detailed_scores.values()])
-            avg_bigram_freq_score = (avg_bigram_freq_score1 + avg_bigram_freq_score2) / 2
+            freq_scores1 = [d['components']['freq_seq1'] for d in detailed_scores.values()]
+            freq_scores2 = [d['components']['freq_seq2'] for d in detailed_scores.values()]
+            avg_2gram_freq_score1 = np.mean(freq_scores1)
+            avg_2gram_freq_score2 = np.mean(freq_scores2)
+            avg_2gram_freq_score = (avg_2gram_freq_score1 + avg_2gram_freq_score2) / 2
 
-            avg_1key_comfort_score = np.mean([d['components']['avg_comfort'] for d in detailed_scores.values()])
-            avg_1gram_freq_score = np.mean([d['components']['avg_freq'] for d in detailed_scores.values()])
+            comfort_scores = [d['components']['avg_comfort'] for d in detailed_scores.values()]
+            freq_scores = [d['components']['avg_freq'] for d in detailed_scores.values()]
+            avg_1key_comfort_score = np.mean(comfort_scores)
+            avg_1gram_freq_score = np.mean(freq_scores)
+
+            # Get first bigram score and letter score (they're the same for all entries)
+            first_entry = next(iter(detailed_scores.values()))
+            bigram_score = first_entry['bigram_score']
+            letter_score = first_entry['letter_score']
 
             writer.writerow([
                 arrangement,
-                positions,
                 rank,
                 f"{score:.4f}",
-                f"{avg_bigram_score:.4f}",
-                f"{avg_key_score:.4f}",
+                f"{bigram_score:.4f}",
+                f"{letter_score:.4f}",
                 f"{avg_2key_comfort_score:.4f}",
+                f"{avg_2gram_freq_score:.4f}",
                 f"{avg_1key_comfort_score:.4f}",
-                f"{avg_bigram_freq_score:.4f}",
                 f"{avg_1gram_freq_score:.4f}"
             ])
     
@@ -256,117 +273,110 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
 # Optimizing functions
 #-----------------------------------------------------------------------------
 def calculate_layout_score(letter_mapping: Dict[str, str], 
-                         norm_bigram_scores: Dict[Tuple[str, str], float],
-                         norm_key_scores: Dict[str, float],
-                         norm_letter_freqs: Dict[str, float],
-                         norm_bigram_freqs: Dict[Tuple[str, str], float],
-                         config: dict,
-                         right_keys: set,
-                         left_keys: set) -> Tuple[float, Dict[str, dict]]:
+                           norm_2key_scores: Dict[Tuple[str, str], float],
+                           norm_1key_scores: Dict[str, float],
+                           norm_bigram_freqs: Dict[Tuple[str, str], float],
+                           norm_letter_freqs: Dict[str, float],
+                           right_keys: set,
+                           config: dict) -> Tuple[float, Dict[str, dict]]:
     """
     Calculate the score for a given layout mapping using the equation:
     
-    bigram_addend = weight_bigram_comfort * (norm_comfort_keys_sequence1 + norm_comfort_keys_sequence2) + 
-                    weight_bigram_frequency * (norm_frequency_bigram_sequence1 + norm_frequency_bigram_sequence2)
-    
-    key_addend = weight_key_comfort * avg_norm_comfort_keys + 
-                 weight_letter_frequency * norm_frequency_bigram_letters
-    
-    score = bigram_addend + key_addend
+    score = bigram_score + letter_score
 
+    where: 
+      bigram_score = bigram_weight * (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2) / 2
+      letter_score = letter_weight * (comfort_key1 * freq_key1 + comfort_key2 * freq_key2) / 2
+    
     Args:
         letter_mapping: Dictionary mapping letters to key positions
-        norm_bigram_scores: Normalized comfort scores for key pairs
-        norm_key_scores: Normalized comfort scores for individual keys
+        norm_2key_scores: Normalized comfort scores for key pairs
+        norm_1key_scores: Normalized comfort scores for individual keys
         norm_letter_freqs: Normalized letter frequencies
         norm_bigram_freqs: Normalized bigram frequencies
-        config: Configuration dictionary
         right_keys: Set of keys on the right side
-        left_keys: Set of keys on the left side
+        config: Configuration dictionary
     
     Returns:
         total_score: Final weighted score
         detailed_scores: Dictionary containing component scores for analysis
     """
-    weights = config['optimization']['scoring']
-    bigram_freq_weight = weights['bigram_frequency_weight']
-    letter_freq_weight = weights['letter_frequency_weight']
-    comfort_weight = weights['comfort_weight']
+    bigram_weight = config['optimization']['scoring']['bigram_weight']
+    letter_weight = config['optimization']['scoring']['letter_weight']
     
     total_score = 0
     detailed_scores = {}
     
-    # Process each letter pair (bigram)
-    for letter1, pos1 in letter_mapping.items():
-        for letter2, pos2 in letter_mapping.items():
-            if letter1 != letter2:
+    # Process each letter pair (bigram) only once
+    letters = list(letter_mapping.keys())
+    for i, letter1 in enumerate(letters):
+        for letter2 in letters[i+1:]:  # Only process each pair once
+            pos1 = letter_mapping[letter1]
+            pos2 = letter_mapping[letter2]
 
-                # Check if keys are on the same side
-                pos1_right = pos1 in right_keys
-                pos2_right = pos2 in right_keys
-                same_side = (pos1_right and pos2_right) or \
-                            (not pos1_right and not pos2_right)
+            # Check if keys are on the same side
+            pos1_right = pos1 in right_keys
+            pos2_right = pos2 in right_keys
+            same_side = (pos1_right and pos2_right) or \
+                        (not pos1_right and not pos2_right)
+            
+            # Calculate bigram_score
+            if same_side:
+                # Get comfort scores and frequencies for both sequences
+                comfort_seq1 = norm_2key_scores.get((pos1, pos2), 0)
+                comfort_seq2 = norm_2key_scores.get((pos2, pos1), 0)
+                freq_seq1 = norm_bigram_freqs.get((letter1, letter2), 0)
+                freq_seq2 = norm_bigram_freqs.get((letter2, letter1), 0)
                 
-                # Calculate bigram_addend
-                if same_side:
-                    # Get comfort scores for both sequences
-                    comfort_seq1 = norm_bigram_scores.get((pos1, pos2), 0)
-                    comfort_seq2 = norm_bigram_scores.get((pos2, pos1), 0)
-                    
-                    # Get frequency scores for both sequences
-                    freq_seq1 = norm_bigram_freqs.get((letter1, letter2), 0)
-                    freq_seq2 = norm_bigram_freqs.get((letter2, letter1), 0)
-                    
-                    # Calculate bigram_addend
-                    bigram_addend = (comfort_weight * (comfort_seq1 + comfort_seq2) + 
-                                    bigram_freq_weight * (freq_seq1 + freq_seq2))
-                else:
-                    bigram_addend = 0
-                
-                # Calculate key_addend
-                avg_comfort = (norm_key_scores.get(pos1, 0) + norm_key_scores.get(pos2, 0)) / 2
-                avg_freq = (norm_letter_freqs.get(letter1, 0) + norm_letter_freqs.get(letter2, 0)) / 2
-                
-                key_addend = (comfort_weight * avg_comfort + 
-                              letter_freq_weight * avg_freq)
-                
-                score = bigram_addend + key_addend
-                total_score += score
-                
-                detailed_scores[f"{letter1}{letter2}"] = {
-                    'total_score': score,
-                    'bigram_addend': bigram_addend,
-                    'key_addend': key_addend,
-                    'components': {
-                        'comfort_seq1': comfort_seq1,
-                        'comfort_seq2': comfort_seq2,
-                        'freq_seq1': freq_seq1,
-                        'freq_seq2': freq_seq2,
-                        'avg_comfort': avg_comfort,
-                        'avg_freq': avg_freq
-                    }
+                # Calculate weighted average of products
+                bigram_score = bigram_weight * (comfort_seq1 * freq_seq1 + 
+                                                comfort_seq2 * freq_seq2) / 2
+            else:
+                bigram_score = 0
+                comfort_seq1 = comfort_seq2 = freq_seq1 = freq_seq2 = 0
+            
+            # Calculate letter_score
+            comfort_key1 = norm_1key_scores.get(pos1, 0)
+            comfort_key2 = norm_1key_scores.get(pos2, 0)
+            freq_key1 = norm_letter_freqs.get(letter1, 0)
+            freq_key2 = norm_letter_freqs.get(letter2, 0)
+            
+            letter_score = letter_weight * (comfort_key1 * freq_key1 + 
+                                            comfort_key2 * freq_key2) / 2
+            
+            score = bigram_score + letter_score
+            total_score += score
+            
+            detailed_scores[f"{letter1}{letter2}"] = {
+                'total_score': score,
+                'bigram_score': bigram_score,
+                'letter_score': letter_score,
+                'components': {
+                    'comfort_seq1': comfort_seq1,
+                    'comfort_seq2': comfort_seq2,
+                    'freq_seq1': freq_seq1,
+                    'freq_seq2': freq_seq2,
+                    'avg_comfort': (comfort_key1 + comfort_key2) / 2,
+                    'avg_freq': (freq_key1 + freq_key2) / 2
                 }
+            }
     
     return total_score, detailed_scores
 
-def evaluate_layout_permutations(config: dict,
-                                 norm_bigram_scores: Dict[Tuple[str, str], float],
-                                 norm_key_scores: Dict[str, float],
-                                 norm_letter_freqs: Dict[str, float],
+def evaluate_layout_permutations(norm_2key_scores: Dict[Tuple[str, str], float],
+                                 norm_1key_scores: Dict[str, float],
                                  norm_bigram_freqs: Dict[Tuple[str, str], float],
-                                 right_keys: set,
-                                 left_keys: set) -> List[Tuple[float, Dict[str, str], Dict[str, dict]]]:
+                                 norm_letter_freqs: Dict[str, float],
+                                 config: dict) -> List[Tuple[float, Dict[str, str], Dict[str, dict]]]:
     """
     Evaluate all possible permutations of letters in the specified key positions.
     
     Args:
         config: Configuration dictionary containing 'letters' and 'keys'
-        norm_bigram_scores: Normalized comfort scores for key pairs
-        norm_key_scores: Normalized comfort scores for individual keys
+        norm_2key_scores: Normalized comfort scores for key pairs
+        norm_1key_scores: Normalized comfort scores for individual keys
         norm_letter_freqs: Normalized letter frequencies
         norm_bigram_freqs: Normalized bigram frequencies
-        right_keys: Set of keys on the right side
-        left_keys: Set of keys on the left side
     
     Returns:
         List of tuples: (score, letter_mapping, detailed_scores) sorted by score descending
@@ -385,6 +395,11 @@ def evaluate_layout_permutations(config: dict,
     if len(set(keys)) != len(keys):
         raise ValueError("Duplicate keys found in input keys")
     
+    # Get keyboard sides
+    right_keys = set()
+    for row in ['top', 'home', 'bottom']:
+        right_keys.update(config['layout']['positions']['right'][row])
+    
     # Generate all possible permutations of letters
     letter_perms = list(permutations(letters))
     total_perms = len(letter_perms)
@@ -402,13 +417,12 @@ def evaluate_layout_permutations(config: dict,
         # Calculate score for this arrangement
         score, detailed_scores = calculate_layout_score(
             letter_mapping=letter_mapping,
-            norm_bigram_scores=norm_bigram_scores,
-            norm_key_scores=norm_key_scores,
-            norm_letter_freqs=norm_letter_freqs,
+            norm_2key_scores=norm_2key_scores,
+            norm_1key_scores=norm_1key_scores,
             norm_bigram_freqs=norm_bigram_freqs,
-            config=config,
+            norm_letter_freqs=norm_letter_freqs,
             right_keys=right_keys,
-            left_keys=left_keys
+            config=config
         )
         
         results.append((score, letter_mapping, detailed_scores))
@@ -430,7 +444,7 @@ def optimize_layout(config_path: str = "config.yaml") -> None:
     visualize_keyboard_layout(None, "Keys to optimize", config)
 
     # Load and normalize comfort scores
-    norm_bigram_scores, norm_key_scores = load_and_normalize_comfort_scores(config)
+    norm_2key_scores, norm_1key_scores = load_and_normalize_comfort_scores(config)
     
     # Load and normalize frequencies
     norm_letter_freqs, norm_bigram_freqs = load_and_normalize_frequencies(
@@ -440,23 +454,14 @@ def optimize_layout(config_path: str = "config.yaml") -> None:
         bigram_frequencies_array=bigram_frequencies_array
     )
     
-    # Get keyboard sides
-    right_keys = set()
-    left_keys = set()
-    for row in ['top', 'home', 'bottom']:
-        right_keys.update(config['layout']['positions']['right'][row])
-        left_keys.update(config['layout']['positions']['left'][row])
-    
     # Run optimization
     try:
         results = evaluate_layout_permutations(
-            config=config,
-            norm_bigram_scores=norm_bigram_scores,
-            norm_key_scores=norm_key_scores,
-            norm_letter_freqs=norm_letter_freqs,
+            norm_2key_scores=norm_2key_scores,
+            norm_1key_scores=norm_1key_scores,
             norm_bigram_freqs=norm_bigram_freqs,
-            right_keys=right_keys,
-            left_keys=left_keys
+            norm_letter_freqs=norm_letter_freqs,
+            config=config
         )
         
         # Show top layouts with visualization
