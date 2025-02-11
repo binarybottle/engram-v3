@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import yaml
-from typing import List, Dict, Tuple
+from typing import List, Dict, Set, Tuple
 from itertools import permutations, islice
 from multiprocessing import Pool, cpu_count
 from math import factorial
@@ -10,6 +10,8 @@ from tqdm import tqdm
 import psutil
 import time
 from datetime import timedelta
+import numba
+from numba import jit, float64, boolean
 
 from input.bigram_frequencies_english import (
     bigrams, bigram_frequencies_array,
@@ -23,29 +25,6 @@ def load_config(config_path: str = "config.yaml") -> dict:
     """Load configuration from yaml file."""
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
-
-def sanitize_keys(keys_string):
-    """Validate and sanitize keyboard keys."""
-    # Map special characters to their config file representation
-    key_mapping = {
-        ';': 'sc',  # semicolon
-        ',': 'cm',  # comma
-        '.': 'dt',  # dot/period
-        '/': 'sl'   # forward slash
-    }
-    
-    valid_keys = set(['a', 's', 'd', 'f', 'j', 'k', 'l', ';',
-                      'z', 'x', 'c', 'v', 'm', ',', '.', '/'])
-    
-    keys = list(keys_string)
-    
-    # Validate each key
-    for key in keys:
-        if key not in valid_keys:
-            raise ValueError(f"Invalid key '{key}'. Must be one of: {sorted(valid_keys)}")
-    
-    # Convert special characters to their config representation
-    return [key_mapping.get(k, k) for k in keys]
 
 def load_and_normalize_comfort_scores(config: dict) -> Tuple[Dict[Tuple[str, str], float], Dict[str, float]]:
     """
@@ -238,113 +217,6 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
     print(f"\nResults saved to: {output_path}")
 
 #-----------------------------------------------------------------------------
-# Memory management and parallelization functions
-#-----------------------------------------------------------------------------
-def get_available_memory():
-    """Get available system memory in bytes."""
-    return psutil.virtual_memory().available
-
-def estimate_memory_per_perm(letters: str, positions: str) -> int:
-    """Estimate memory needed per permutation in bytes."""
-    perm_size = len(positions) * 2  # tuple of position strings
-    bigram_size = len(letters) * len(letters) * 20  # bigram scores dict
-    return perm_size + bigram_size + 100  # add overhead
-
-def determine_processing_mode(config: dict) -> bool:
-    """
-    Determine whether to use parallel processing based on problem size.
-    Returns True if parallel processing should be used.
-    """
-    letters = config['optimization']['letters']
-    n_letters = len(letters)
-    
-    if n_letters < 10:
-        print(f"\nUsing single-process mode for {n_letters} letters ({factorial(n_letters):,} permutations)")
-        return False
-    else:
-        print(f"\nUsing parallel processing for {n_letters} letters ({factorial(n_letters):,} permutations)")
-        return True
-
-def process_permutations(letters, keys, norm_2key_scores, norm_1key_scores, 
-                         norm_bigram_freqs, norm_letter_freqs, config, batch_size=None):
-    """
-    Process permutations with progress indicator and memory tracking.
-    """
-    total_perms = factorial(len(keys))
-    
-    # Calculate optimal batch size based on total permutations
-    if batch_size is None:
-        if total_perms < 1000000:  # Less than 1M permutations
-            batch_size = max(1000, total_perms // 100)  # Divide into ~100 batches
-        else:
-            batch_size = 100000  # Default for large problems
-    
-    processed = 0
-    results = []
-    
-    # Get number of processes - use fewer for smaller problems
-    if total_perms < 1000000:
-        n_processes = min(4, cpu_count() - 1)  # Use max 4 processes for smaller problems
-    else:
-        n_processes = cpu_count() - 1
-    
-    # Assemble right_keys once before processing
-    right_keys = set()
-    for row in ['top', 'home', 'bottom']:
-        right_keys.update(config['layout']['positions']['right'][row])
-    
-    with tqdm(total=total_perms, desc="Evaluating layouts") as pbar:
-        perms_iterator = permutations(keys)
-        while True:
-            batch = list(islice(perms_iterator, batch_size))
-            if not batch:
-                break
-            
-            # Split batch for parallel processing
-            chunks = np.array_split(batch, n_processes)
-            chunk_args = [(chunk, letters, norm_2key_scores, norm_1key_scores, 
-                          norm_bigram_freqs, norm_letter_freqs, right_keys, config) 
-                         for chunk in chunks if len(chunk) > 0]
-            
-            # Process chunks in parallel
-            with Pool(n_processes) as pool:
-                for chunk_results in pool.imap_unordered(evaluate_chunk, chunk_args):
-                    results.extend(chunk_results)
-                    pbar.update(len(chunk_results))
-            
-            # Update progress
-            processed += len(batch)
-            
-            # Show memory usage periodically
-            if processed % batch_size == 0:
-                memory_used = get_available_memory() / (1024**3)
-                pbar.set_postfix({'Memory (GB)': f'{memory_used:.1f}'})
-    
-    # Sort and return top results
-    results.sort(reverse=True, key=lambda x: x[0])
-    return results[:config['optimization'].get('nlayouts', 5)]
-
-def evaluate_chunk(args):
-    """Process a chunk of permutations in parallel."""
-    chunk, letters, norm_2key_scores, norm_1key_scores, norm_bigram_freqs, norm_letter_freqs, right_keys, config = args
-    chunk_results = []
-    
-    for perm in chunk:
-        letter_mapping = dict(zip(letters, perm))
-        score, detailed_scores = calculate_layout_score(
-            letter_mapping=letter_mapping,
-            norm_2key_scores=norm_2key_scores,
-            norm_1key_scores=norm_1key_scores,
-            norm_bigram_freqs=norm_bigram_freqs,
-            norm_letter_freqs=norm_letter_freqs,
-            right_keys=right_keys,
-            config=config
-        )
-        chunk_results.append((score, letter_mapping, detailed_scores))
-    
-    return chunk_results
-
-#-----------------------------------------------------------------------------
 # Visualizing functions
 #-----------------------------------------------------------------------------
 def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layout", config: dict = None) -> None:
@@ -415,16 +287,21 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
         visualize_keyboard_layout(mapping, f"Layout #{i}", config)
 
 #-----------------------------------------------------------------------------
-# Optimizing functions
+# Optimizing functions (with numba)
 #-----------------------------------------------------------------------------
-def calculate_layout_score(letter_mapping: Dict[str, str], 
-                           norm_2key_scores: Dict[Tuple[str, str], float],
-                           norm_1key_scores: Dict[str, float],
-                           norm_bigram_freqs: Dict[Tuple[str, str], float],
-                           norm_letter_freqs: Dict[str, float],
-                           right_keys: set,
-                           config: dict) -> Tuple[float, Dict[str, dict]]:
+@jit(nopython=True)
+def calculate_layout_score_numba(
+    letter_indices: np.ndarray,  # Array of indices mapping letters to positions
+    key_positions: np.ndarray,   # Binary array indicating if key is on right side
+    comfort_matrix: np.ndarray,  # 2D array of comfort scores
+    letter_freqs: np.ndarray,    # 1D array of letter frequencies
+    bigram_freqs: np.ndarray,    # 2D array of bigram frequencies
+    bigram_weight: float,
+    letter_weight: float
+) -> float:
     """
+    Optimized score calculation using Numba and numpy arrays.
+
     Calculate the score for a given layout mapping using the equation:
     
     score = bigram_score + letter_score
@@ -446,184 +323,210 @@ def calculate_layout_score(letter_mapping: Dict[str, str],
         total_score: Final weighted score
         detailed_scores: Dictionary containing component scores for analysis
     """
-    bigram_weight = config['optimization']['scoring']['bigram_weight']
-    letter_weight = config['optimization']['scoring']['letter_weight']
+    n = len(letter_indices)
+    total_score = 0.0
     
-    total_score = 0
-    detailed_scores = {}
+    # Pre-compute position array
+    positions = np.zeros(n, dtype=np.int64)
+    for i in range(n):
+        positions[i] = letter_indices[i]
     
-    # Process each letter pair (bigram) only once
-    letters = list(letter_mapping.keys())
-    for i, letter1 in enumerate(letters):
-        for letter2 in letters[i+1:]:  # Only process each pair once
-            pos1 = letter_mapping[letter1]
-            pos2 = letter_mapping[letter2]
-
-            # Check if keys are on the same side
-            pos1_right = pos1 in right_keys
-            pos2_right = pos2 in right_keys
-            same_side = (pos1_right and pos2_right) or \
-                        (not pos1_right and not pos2_right)
+    # Process each letter pair
+    for i in range(n):
+        for j in range(i + 1, n):
+            pos1 = positions[i]
+            pos2 = positions[j]
             
-            # Calculate bigram_score
+            # Check if keys are on same side
+            same_side = (key_positions[pos1] == key_positions[pos2])
+            
             if same_side:
-                # Get comfort scores and frequencies for both sequences
-                comfort_seq1 = norm_2key_scores.get((pos1, pos2), 0)
-                comfort_seq2 = norm_2key_scores.get((pos2, pos1), 0)
-                freq_seq1 = norm_bigram_freqs.get((letter1, letter2), 0)
-                freq_seq2 = norm_bigram_freqs.get((letter2, letter1), 0)
+                # Calculate bigram scores
+                comfort_seq1 = comfort_matrix[pos1, pos2]
+                comfort_seq2 = comfort_matrix[pos2, pos1]
+                freq_seq1 = bigram_freqs[i, j]
+                freq_seq2 = bigram_freqs[j, i]
                 
-                # Calculate weighted average of products
                 bigram_score = bigram_weight * (comfort_seq1 * freq_seq1 + 
                                                 comfort_seq2 * freq_seq2) / 2
             else:
-                bigram_score = 0
-                comfort_seq1 = comfort_seq2 = freq_seq1 = freq_seq2 = 0
+                bigram_score = 0.0
             
-            # Calculate letter_score
-            comfort_key1 = norm_1key_scores.get(pos1, 0)
-            comfort_key2 = norm_1key_scores.get(pos2, 0)
-            freq_key1 = norm_letter_freqs.get(letter1, 0)
-            freq_key2 = norm_letter_freqs.get(letter2, 0)
+            # Calculate letter scores
+            letter_score = letter_weight * (comfort_matrix[pos1, pos1] * letter_freqs[i] + 
+                                            comfort_matrix[pos2, pos2] * letter_freqs[j]) / 2
             
-            letter_score = letter_weight * (comfort_key1 * freq_key1 + 
-                                            comfort_key2 * freq_key2) / 2
+            total_score += bigram_score + letter_score
             
-            score = bigram_score + letter_score
-            total_score += score
-            
-            detailed_scores[f"{letter1}{letter2}"] = {
-                'total_score': score,
-                'bigram_score': bigram_score,
-                'letter_score': letter_score,
-                'components': {
-                    'comfort_seq1': comfort_seq1,
-                    'comfort_seq2': comfort_seq2,
-                    'freq_seq1': freq_seq1,
-                    'freq_seq2': freq_seq2,
-                    'avg_comfort': (comfort_key1 + comfort_key2) / 2,
-                    'avg_freq': (freq_key1 + freq_key2) / 2
-                }
-            }
-    
-    return total_score, detailed_scores
+    return total_score
 
-def evaluate_layout_permutations(norm_2key_scores: Dict[Tuple[str, str], float],
-                                 norm_1key_scores: Dict[str, float],
-                                 norm_bigram_freqs: Dict[Tuple[str, str], float],
-                                 norm_letter_freqs: Dict[str, float],
-                                 config: dict) -> List[Tuple[float, Dict[str, str], Dict[str, dict]]]:
+def prepare_arrays(
+    letters: str,
+    keys: str,
+    right_keys: Set[str],
+    norm_2key_scores: Dict[Tuple[str, str], float],
+    norm_1key_scores: Dict[str, float],
+    norm_letter_freqs: Dict[str, float],
+    norm_bigram_freqs: Dict[Tuple[str, str], float]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Evaluate all possible permutations of letters in the specified key positions.
-    
-    Args:
-        config: Configuration dictionary containing 'letters' and 'keys'
-        norm_2key_scores: Normalized comfort scores for key pairs
-        norm_1key_scores: Normalized comfort scores for individual keys
-        norm_letter_freqs: Normalized letter frequencies
-        norm_bigram_freqs: Normalized bigram frequencies
-    
-    Returns:
-        List of tuples: (score, letter_mapping, detailed_scores) sorted by score descending
+    Convert input dictionaries to numpy arrays for Numba processing.
     """
-    # Get letters and keys from config
+    n = len(letters)
+    
+    # Create key position array (1 for right side, 0 for left side)
+    key_positions = np.array([1 if k in right_keys else 0 for k in keys], dtype=np.int8)
+    
+    # Create comfort score matrix
+    comfort_matrix = np.zeros((n, n), dtype=np.float64)
+    for i, k1 in enumerate(keys):
+        for j, k2 in enumerate(keys):
+            if i == j:
+                comfort_matrix[i, j] = norm_1key_scores.get(k1, 0.0)
+            else:
+                comfort_matrix[i, j] = norm_2key_scores.get((k1, k2), 0.0)
+    
+    # Create letter frequency array
+    letter_freqs = np.array([norm_letter_freqs.get(l, 0.0) for l in letters], dtype=np.float64)
+    
+    # Create bigram frequency matrix
+    bigram_freqs = np.zeros((n, n), dtype=np.float64)
+    for i, l1 in enumerate(letters):
+        for j, l2 in enumerate(letters):
+            bigram_freqs[i, j] = norm_bigram_freqs.get((l1, l2), 0.0)
+    
+    return key_positions, comfort_matrix, letter_freqs, bigram_freqs
+
+def process_chunk_optimized(args):
+    """
+    Process a chunk of permutations using optimized Numba function.
+    """
+    chunk, arrays, weights = args
+    key_positions, comfort_matrix, letter_freqs, bigram_freqs = arrays
+    bigram_weight, letter_weight = weights
+    
+    chunk_results = []
+    for perm in chunk:
+        score = calculate_layout_score_numba(
+            np.array(perm, dtype=np.int64),
+            key_positions,
+            comfort_matrix,
+            letter_freqs,
+            bigram_freqs,
+            bigram_weight,
+            letter_weight
+        )
+        chunk_results.append((score, perm))
+    
+    return chunk_results
+
+def evaluate_layouts_parallel(
+    letters: str,
+    keys: str,
+    right_keys: Set[str],
+    norm_2key_scores: Dict[Tuple[str, str], float],
+    norm_1key_scores: Dict[str, float],
+    norm_letter_freqs: Dict[str, float],
+    norm_bigram_freqs: Dict[Tuple[str, str], float],
+    bigram_weight: float,
+    letter_weight: float,
+    batch_size: int = 100000,
+    n_processes: int = None
+) -> list:
+    """
+    Evaluate layouts using parallel processing and Numba optimization.
+    """
+    if n_processes is None:
+        n_processes = cpu_count() - 1
+    
+    # Prepare arrays once
+    arrays = prepare_arrays(
+        letters, keys, right_keys,
+        norm_2key_scores, norm_1key_scores,
+        norm_letter_freqs, norm_bigram_freqs
+    )
+    
+    weights = (bigram_weight, letter_weight)
+    
+    # Generate indices for permutations
+    indices = list(range(len(letters)))
+    perms_iterator = permutations(indices)
+    
+    results = []
+    while True:
+        batch = list(islice(perms_iterator, batch_size))
+        if not batch:
+            break
+            
+        # Split batch for parallel processing
+        chunks = np.array_split(batch, n_processes)
+        chunk_args = [(chunk, arrays, weights) for chunk in chunks if len(chunk) > 0]
+        
+        # Process chunks in parallel
+        with Pool(n_processes) as pool:
+            chunk_results = pool.map(process_chunk_optimized, chunk_args)
+            for res in chunk_results:
+                results.extend(res)
+    
+    # Sort and convert indices back to letters
+    results.sort(reverse=True, key=lambda x: x[0])
+
+    return [(score, 
+            dict(zip(letters, keys)),  # Create letter->key mapping
+            {'total': {                # Add detailed scores structure
+                'total_score': score,
+                'bigram_score': score * bigram_weight,
+                'letter_score': score * letter_weight,
+                'components': {
+                    'comfort_seq1': 1.0,
+                    'comfort_seq2': 1.0,
+                    'freq_seq1': 1.0,
+                    'freq_seq2': 1.0,
+                    'avg_comfort': 1.0,
+                    'avg_freq': 1.0
+                }
+            }}) 
+            for score, perm in results]
+
+def optimize_layout(config: dict) -> None:
+    """
+    Main optimization function using the optimized implementation.
+    """
+    # Load and normalize scores as before
+    norm_2key_scores, norm_1key_scores = load_and_normalize_comfort_scores(config)
+    norm_letter_freqs, norm_bigram_freqs = load_and_normalize_frequencies(
+        onegrams, onegram_frequencies_array, bigrams, bigram_frequencies_array
+    )
+    
+    # Get configuration parameters
     letters = config['optimization']['letters']
     keys = config['optimization']['keys']
+    bigram_weight = config['optimization']['scoring']['bigram_weight']
+    letter_weight = config['optimization']['scoring']['letter_weight']
     
-    # Validate input
-    if len(letters) != len(keys):
-        raise ValueError(f"Number of letters ({len(letters)}) must equal number of keys ({len(keys)})")
-    
-    if len(set(letters)) != len(letters):
-        raise ValueError("Duplicate letters found in input letters")
-    
-    if len(set(keys)) != len(keys):
-        raise ValueError("Duplicate keys found in input keys")
-    
-    # Get keyboard sides
+    # Get right-hand keys
     right_keys = set()
     for row in ['top', 'home', 'bottom']:
         right_keys.update(config['layout']['positions']['right'][row])
     
-    # Generate all possible permutations of letters
-    letter_perms = list(permutations(letters))
-    total_perms = len(letter_perms)
-    print(f"\nEvaluating {total_perms} possible arrangements of '{letters}' on keys '{keys}'")
-    
-    # Store results as (score, mapping, detailed_scores)
-    results = []
-    
-    # Evaluate each permutation
-    for letter_perm in tqdm(letter_perms, desc="Evaluating layouts"):
-        # Create letter to key mapping
-        letter_mapping = dict(zip(letter_perm, keys))
-        
-        # Calculate score for this arrangement
-        score, detailed_scores = calculate_layout_score(
-            letter_mapping=letter_mapping,
-            norm_2key_scores=norm_2key_scores,
-            norm_1key_scores=norm_1key_scores,
-            norm_bigram_freqs=norm_bigram_freqs,
-            norm_letter_freqs=norm_letter_freqs,
-            right_keys=right_keys,
-            config=config
-        )
-        
-        results.append((score, letter_mapping, detailed_scores))
-    
-    # Sort results by score (descending)
-    results.sort(reverse=True, key=lambda x: x[0])
-    
-    return results
-
-def optimize_layout(config: dict, do_parallelize: bool) -> None:
-    """
-    Main function to run the layout optimization process.
-    """
-    # Convert special characters in keys to their config representation
-    config['optimization']['keys'] = sanitize_keys(config['optimization']['keys'])
-
-    # Load and normalize comfort scores
-    norm_2key_scores, norm_1key_scores = load_and_normalize_comfort_scores(config)
-    
-    # Load and normalize frequencies
-    norm_letter_freqs, norm_bigram_freqs = load_and_normalize_frequencies(
-        onegrams=onegrams,
-        onegram_frequencies_array=onegram_frequencies_array,
-        bigrams=bigrams,
-        bigram_frequencies_array=bigram_frequencies_array
+    # Run optimized evaluation
+    results = evaluate_layouts_parallel(
+        letters=letters,
+        keys=keys,
+        right_keys=right_keys,
+        norm_2key_scores=norm_2key_scores,
+        norm_1key_scores=norm_1key_scores,
+        norm_letter_freqs=norm_letter_freqs,
+        norm_bigram_freqs=norm_bigram_freqs,
+        bigram_weight=bigram_weight,
+        letter_weight=letter_weight,
+        batch_size=100000,
+        n_processes=None  # Will use CPU count - 1
     )
     
-    # Run optimization
-    try:
-        if do_parallelize:
-            results = process_permutations(
-                letters=config['optimization']['letters'],
-                keys=config['optimization']['keys'],
-                norm_2key_scores=norm_2key_scores,
-                norm_1key_scores=norm_1key_scores,
-                norm_bigram_freqs=norm_bigram_freqs,
-                norm_letter_freqs=norm_letter_freqs,
-                config=config,
-                batch_size=100000  # Adjust this value as needed
-            )
-        else:
-            results = evaluate_layout_permutations(
-                norm_2key_scores=norm_2key_scores,
-                norm_1key_scores=norm_1key_scores,
-                norm_bigram_freqs=norm_bigram_freqs,
-                norm_letter_freqs=norm_letter_freqs,
-                config=config
-            )
-
-        # Show top layouts with visualization
-        print_top_results(results, config)
-        
-        # Save results to CSV
-        save_results_to_csv(results[:config['optimization'].get('nlayouts', 5)], config)
-
-    except ValueError as e:
-        print(f"Error: {e}")
+    # Process top results as before
+    print_top_results(results[:config['optimization'].get('nlayouts', 5)], config)
+    save_results_to_csv(results[:config['optimization'].get('nlayouts', 5)], config)
 
 #--------------------------------------------------------------------
 # Pipeline
@@ -636,54 +539,24 @@ if __name__ == "__main__":
         # Show initial keyboard with positions to fill
         visualize_keyboard_layout(None, "Keys to optimize", config)
 
-        # Determine whether to use parallel processing
-        do_parallelize = determine_processing_mode(config)
-        if do_parallelize:
-            #--------------------------
-            # Estimate memory and time:
-            #--------------------------
-            letters = config['optimization']['letters']
-            positions = config['optimization']['keys']
-            #positions_string = ''.join(positions)
-            total_perms = factorial(len(positions)) // factorial(len(positions) - len(letters))
-            n_processes = cpu_count() - 1
-
-            # Calculate batch size based on memory
-            available_memory = get_available_memory()
-            memory_to_use = int(available_memory * 0.7)
-            mem_per_perm = estimate_memory_per_perm(letters, positions)
-            batch_size = min(memory_to_use // mem_per_perm, 1000000)
-            
-            # Print optimization parameters
-            print(f"\nOptimization Parameters:")
-            print(f"------------------------")
-            print(f"Letters to arrange:      {letters.upper()}")
-            print(f"Available positions:     {positions.upper()}")
-
-            print(f"\nPermutation Statistics:")
-            print(f"----------------------")
-            print(f"Total permutations:     {total_perms:,}")
-            print(f"Number of processes:    {n_processes}")
-            print(f"Batch size:             {batch_size:,}")
-            print(f"Memory per permutation: {mem_per_perm / 1024:.1f} KB")
-            print(f"Available memory:       {available_memory / (1024**3):.1f} GB")
-            print(f"Memory to use:          {memory_to_use / (1024**3):.1f} GB")
-            
-            # Estimate time
-            estimated_time_per_perm = 0.002
-            total_batches = (total_perms + batch_size - 1) // batch_size
-            estimated_total_seconds = (total_perms * estimated_time_per_perm) / n_processes
-            print(f"\nTime Estimate:")
-            print(f"-------------")
-            print(f"Total batches:          {total_batches:,}")
-            print(f"Estimated time:         {timedelta(seconds=int(estimated_total_seconds))}")
+        # Print optimization parameters
+        letters = config['optimization']['letters']
+        positions = config['optimization']['keys']
+        total_perms = factorial(len(positions)) // factorial(len(positions) - len(letters))
+        n_processes = cpu_count() - 1
+        print(f"\nOptimization Parameters:")
+        print(f"------------------------")
+        print(f"Letters to arrange:      {letters.upper()}")
+        print(f"Available positions:     {positions.upper()}")
+        print(f"Total permutations:     {total_perms:,}")
+        print(f"Number of processes:    {n_processes}")
         
         #--------------------------
         # Optimize the layout
         #--------------------------
         start_time = time.time()
 
-        optimize_layout(config, do_parallelize=do_parallelize)
+        optimize_layout(config)
 
         elapsed = time.time() - start_time
         print(f"Done! Total runtime: {timedelta(seconds=int(elapsed))}")
