@@ -322,8 +322,8 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
     print(template.format(**layout_chars))
 
 def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
-                     config: dict,
-                     n: int = None) -> None:
+                      config: dict,
+                      n: int = None) -> None:
     """
     Print the top N results with their scores and mappings.
     
@@ -768,9 +768,20 @@ def optimize_layout(config: dict) -> None:
         n_solutions=n_layouts
     )
     
+    # Sort results by total score (descending)
+    sorted_results = sorted(
+        results,
+        key=lambda x: (
+            x[0],  # total_score
+            x[2]['total']['bigram_score'],  # use bigram score as secondary sort
+            x[2]['total']['letter_score']   # use letter score as tertiary sort
+        ),
+        reverse=True
+    )
+ 
     # Process results (no need to slice anymore)
-    print_top_results(results, config)
-    save_results_to_csv(results, config)
+    print_top_results(sorted_results, config)
+    save_results_to_csv(sorted_results, config)
 
 #--------------------------------------------------------------------
 # Pipeline
