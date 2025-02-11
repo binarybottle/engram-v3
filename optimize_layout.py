@@ -28,59 +28,63 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
 def load_and_normalize_comfort_scores(config: dict) -> Tuple[Dict[Tuple[str, str], float], Dict[str, float]]:
     """
-    Load and normalize comfort scores for both bigrams and individual keys.
-    Returns normalized scores for both left and right hand positions.
+    Load and normalize comfort scores for both key pairs and individual keys.
+    Returns normalized scores for both left and (left-mirrored) right hand positions.
     """
     # Load raw data
-    bigram_df = pd.read_csv(config['paths']['input']['two_key_comfort_scores_file'])
-    key_df = pd.read_csv(config['paths']['input']['one_key_comfort_scores_file'])
+    twokey_df = pd.read_csv(config['paths']['input']['two_key_comfort_scores_file'])
+    onekey_df = pd.read_csv(config['paths']['input']['one_key_comfort_scores_file'])
     
     # Get position mappings for right-to-left
     right_to_left = config['layout']['position_mappings']['right_to_left']
     left_to_right = {v: k for k, v in right_to_left.items()}
     
     # Normalize comfort scores (lower raw scores are better)
-    bigram_min = bigram_df['comfort_score'].min()
-    bigram_max = bigram_df['comfort_score'].max()
-    key_min = key_df['comfort_score'].min()
-    key_max = key_df['comfort_score'].max()
+    twokey_min = twokey_df['comfort_score'].min()
+    twokey_max = twokey_df['comfort_score'].max()
+    onekey_min = onekey_df['comfort_score'].min()
+    onekey_max = onekey_df['comfort_score'].max()
     
     #print("\nComfort score normalization:")
-    #print(f"Key comfort range: min={key_min:.4f}, max={key_max:.4f}")
+    #print(f"2-key comfort range: min={twokey_min:.4f}, max={twokey_max:.4f}")
+    #print(f"1-key comfort range: min={onekey_min:.4f}, max={onekey_max:.4f}")
 
     # Create normalized bigram comfort scores dictionary
-    norm_bigram_scores = {}
-    for _, row in bigram_df.iterrows():
+    norm_twokey_scores = {}
+    for _, row in twokey_df.iterrows():
         # Normalize score
-        norm_score = (row['comfort_score'] - bigram_min) / (bigram_max - bigram_min)
+        norm_score = (row['comfort_score'] - twokey_min) / (twokey_max - twokey_min)
         
         # Add left hand bigrams
         key1, key2 = row['first_char'], row['second_char']
-        norm_bigram_scores[(key1, key2)] = norm_score
+        norm_twokey_scores[(key1, key2)] = norm_score
         
         # Mirror to right hand if both keys have right-hand equivalents
         if key1 in left_to_right and key2 in left_to_right:
             right_key1 = left_to_right[key1]
             right_key2 = left_to_right[key2]
-            norm_bigram_scores[(right_key1, right_key2)] = norm_score
+            norm_twokey_scores[(right_key1, right_key2)] = norm_score
     
-    # Create normalized single key comfort scores dictionary
-    norm_key_scores = {}
-    for _, row in key_df.iterrows():
+        #print(f"Key pair {key1}, {key2}: raw={row['comfort_score']:.4f}, normalized={norm_score:.4f}")
+
+    # Create normalized single-key comfort scores dictionary
+    norm_onekey_scores = {}
+    for _, row in onekey_df.iterrows():
         # Normalize score
-        norm_score = (row['comfort_score'] - key_min) / (key_max - key_min)
+        norm_score = (row['comfort_score'] - onekey_min) / (onekey_max - onekey_min)
 
         # Add left hand key
         key = row['key']
-        norm_key_scores[key] = norm_score
+        norm_onekey_scores[key] = norm_score
+        
         #print(f"Key {key}: raw={row['comfort_score']:.4f}, normalized={norm_score:.4f}")
         
         # Mirror to right hand if key has right-hand equivalent
         if key in left_to_right:
             right_key = left_to_right[key]
-            norm_key_scores[right_key] = norm_score
+            norm_onekey_scores[right_key] = norm_score
     
-    return norm_bigram_scores, norm_key_scores
+    return norm_twokey_scores, norm_onekey_scores
 
 def load_and_normalize_frequencies(onegrams: str, 
                                    onegram_frequencies_array: np.ndarray,
@@ -136,6 +140,42 @@ def load_and_normalize_frequencies(onegrams: str,
     
     return norm_letter_freqs, norm_bigram_freqs
 
+def prepare_arrays(
+    letters: str,
+    keys: str,
+    right_keys: Set[str],
+    norm_2key_scores: Dict[Tuple[str, str], float],
+    norm_1key_scores: Dict[str, float],
+    norm_bigram_freqs: Dict[Tuple[str, str], float],
+    norm_letter_freqs: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Prepare input arrays for the numba-optimized scoring function.
+    """
+    n = len(letters)
+    
+    # Create key position array (1 for right side, 0 for left side)
+    key_LR = np.array([1 if k in right_keys else 0 for k in keys], dtype=np.int8)
+    
+    # Create comfort score matrix
+    comfort_matrix = np.zeros((n, n), dtype=np.float64)
+    for i, k1 in enumerate(keys):
+        for j, k2 in enumerate(keys):
+            if i == j:
+                comfort_matrix[i, j] = norm_1key_scores.get(k1, 0.0)
+            else:
+                comfort_matrix[i, j] = norm_2key_scores.get((k1, k2), 0.0)
+    
+    # Create letter frequency array
+    letter_freqs = np.array([norm_letter_freqs.get(l, 0.0) for l in letters], dtype=np.float64)
+    
+    # Create bigram frequency matrix
+    bigram_freqs = np.zeros((n, n), dtype=np.float64)
+    for i, l1 in enumerate(letters):
+        for j, l2 in enumerate(letters):
+            bigram_freqs[i, j] = norm_bigram_freqs.get((l1, l2), 0.0)
+    
+    return key_LR, comfort_matrix, letter_freqs, bigram_freqs
+
 def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
                         config: dict,
                         output_path: str = "layout_results.csv") -> None:
@@ -154,7 +194,6 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
         writer = csv.writer(f)
         
         # Write header with configuration info
-        writer.writerow(['Configuration'])
         writer.writerow(['Letters', config['optimization']['letters']])
         writer.writerow(['Keys', config['optimization']['keys']])
         writer.writerow(['Bigram weight', config['optimization']['scoring']['bigram_weight']])
@@ -294,22 +333,22 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
 @jit(nopython=True)
 def calculate_layout_score_numba(
     letter_indices: np.ndarray,  
-    key_positions: np.ndarray,   
+    key_LR: np.ndarray,   
     comfort_matrix: np.ndarray,  
-    letter_freqs: np.ndarray,    
     bigram_freqs: np.ndarray,    
+    letter_freqs: np.ndarray,    
     bigram_weight: float,
     letter_weight: float
-) -> tuple:  # Changed return type to return component scores
+) -> tuple:
     """
     Calculate layout score and return both total and component scores.
 
     Args:
         letter_indices: Array mapping letters to position indices
-        key_positions: Binary array (1 for right side, 0 for left side)
+        key_LR: Binary array (1 for right side, 0 for left side)
         comfort_matrix: Matrix of comfort scores for key pairs
-        letter_freqs: Array of letter frequencies
         bigram_freqs: Matrix of bigram frequencies
+        letter_freqs: Array of letter frequencies
         bigram_weight: Weight for bigram scores
         letter_weight: Weight for letter scores
     
@@ -327,14 +366,14 @@ def calculate_layout_score_numba(
         pos = positions[i]
         letter_component += comfort_matrix[pos, pos] * letter_freqs[i]
     
-    # Calculate bigram scores
+    # Calculate bigram scores (for both sequences of the two keys/letters)
     bigram_component = 0.0
     for i in range(n):
         for j in range(i + 1, n):
             pos1 = positions[i]
             pos2 = positions[j]
             
-            if key_positions[pos1] == key_positions[pos2]:
+            if key_LR[pos1] == key_LR[pos2]:
                 comfort_seq1 = comfort_matrix[pos1, pos2]
                 freq_seq1 = bigram_freqs[i, j]
                 comfort_seq2 = comfort_matrix[pos2, pos1]
@@ -355,17 +394,17 @@ def process_chunk_optimized(args):
     Process a chunk of permutations using updated scoring function.
     """
     chunk, arrays, weights = args
-    key_positions, comfort_matrix, letter_freqs, bigram_freqs = arrays
+    key_LR, comfort_matrix, letter_freqs, bigram_freqs = arrays
     bigram_weight, letter_weight = weights
     
     chunk_results = []
     for perm in chunk:
         total_score, bigram_score, letter_score = calculate_layout_score_numba(
             np.array(perm, dtype=np.int64),
-            key_positions,
+            key_LR,
             comfort_matrix,
-            letter_freqs,
             bigram_freqs,
+            letter_freqs,
             bigram_weight,
             letter_weight
         )
@@ -373,52 +412,14 @@ def process_chunk_optimized(args):
     
     return chunk_results
 
-def prepare_arrays(
-    letters: str,
-    keys: str,
-    right_keys: Set[str],
-    norm_2key_scores: Dict[Tuple[str, str], float],
-    norm_1key_scores: Dict[str, float],
-    norm_letter_freqs: Dict[str, float],
-    norm_bigram_freqs: Dict[Tuple[str, str], float]
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Prepare input arrays for the numba-optimized scoring function.
-    No changes needed to this function, included for completeness.
-    """
-    n = len(letters)
-    
-    # Create key position array (1 for right side, 0 for left side)
-    key_positions = np.array([1 if k in right_keys else 0 for k in keys], dtype=np.int8)
-    
-    # Create comfort score matrix
-    comfort_matrix = np.zeros((n, n), dtype=np.float64)
-    for i, k1 in enumerate(keys):
-        for j, k2 in enumerate(keys):
-            if i == j:
-                comfort_matrix[i, j] = norm_1key_scores.get(k1, 0.0)
-            else:
-                comfort_matrix[i, j] = norm_2key_scores.get((k1, k2), 0.0)
-    
-    # Create letter frequency array
-    letter_freqs = np.array([norm_letter_freqs.get(l, 0.0) for l in letters], dtype=np.float64)
-    
-    # Create bigram frequency matrix
-    bigram_freqs = np.zeros((n, n), dtype=np.float64)
-    for i, l1 in enumerate(letters):
-        for j, l2 in enumerate(letters):
-            bigram_freqs[i, j] = norm_bigram_freqs.get((l1, l2), 0.0)
-    
-    return key_positions, comfort_matrix, letter_freqs, bigram_freqs
-
 def evaluate_layouts_parallel(
     letters: str,
     keys: str,
     right_keys: Set[str],
     norm_2key_scores: Dict[Tuple[str, str], float],
     norm_1key_scores: Dict[str, float],
-    norm_letter_freqs: Dict[str, float],
     norm_bigram_freqs: Dict[Tuple[str, str], float],
+    norm_letter_freqs: Dict[str, float],
     bigram_weight: float,
     letter_weight: float,
     batch_size: int = 100000,
@@ -436,7 +437,7 @@ def evaluate_layouts_parallel(
     arrays = prepare_arrays(
         letters, keys, right_keys,
         norm_2key_scores, norm_1key_scores,
-        norm_letter_freqs, norm_bigram_freqs
+        norm_bigram_freqs, norm_letter_freqs
     )
     
     weights = (bigram_weight, letter_weight)
@@ -474,14 +475,30 @@ def evaluate_layouts_parallel(
     # Sort and convert indices back to letters
     results.sort(reverse=True, key=lambda x: x[0])
 
-    return [(total_score, 
-            dict(zip(letters, keys)),
+    # Convert results, using permutation indices correctly
+    final_results = []
+    for total_score, bigram_score, letter_score, perm in results:
+        # Map the permutation indices to actual keys
+        key_mapping = dict(zip(letters, [keys[i] for i in perm]))
+        
+        # Add debug output
+        print(f"\nLayout score: {total_score:.4f}")
+        print(f"Permutation: {perm}")
+        print(f"Mapping: {key_mapping}")
+        print(f"Component scores - Bigram: {bigram_score:.4f}, Letter: {letter_score:.4f}")
+        
+        final_results.append((
+            total_score,
+            key_mapping,
             {'total': {
                 'total_score': total_score,
-                'bigram_score': bigram_score,  
-                'letter_score': letter_score    
-            }}) 
-            for total_score, bigram_score, letter_score, perm in results]
+                'bigram_score': bigram_score,
+                'letter_score': letter_score
+            }}
+        ))
+    
+    final_results.sort(reverse=True, key=lambda x: x[0])
+    return final_results
 
 def optimize_layout(config: dict) -> None:
     """
@@ -511,12 +528,12 @@ def optimize_layout(config: dict) -> None:
         right_keys=right_keys,
         norm_2key_scores=norm_2key_scores,
         norm_1key_scores=norm_1key_scores,
-        norm_letter_freqs=norm_letter_freqs,
         norm_bigram_freqs=norm_bigram_freqs,
+        norm_letter_freqs=norm_letter_freqs,
         bigram_weight=bigram_weight,
         letter_weight=letter_weight,
         batch_size=100000,
-        n_processes=None  # Will use CPU count - 1
+        n_processes=None  # set elsewhere to CPU count - 1
     )
     
     # Process top results as before
