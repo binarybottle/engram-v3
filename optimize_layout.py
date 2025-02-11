@@ -250,17 +250,48 @@ def estimate_memory_per_perm(letters: str, positions: str) -> int:
     bigram_size = len(letters) * len(letters) * 20  # bigram scores dict
     return perm_size + bigram_size + 100  # add overhead
 
+def determine_processing_mode(config: dict) -> bool:
+    """
+    Determine whether to use parallel processing based on problem size.
+    Returns True if parallel processing should be used.
+    """
+    letters = config['optimization']['letters']
+    n_letters = len(letters)
+    
+    if n_letters < 10:
+        print(f"\nUsing single-process mode for {n_letters} letters ({factorial(n_letters):,} permutations)")
+        return False
+    else:
+        print(f"\nUsing parallel processing for {n_letters} letters ({factorial(n_letters):,} permutations)")
+        return True
+
 def process_permutations(letters, keys, norm_2key_scores, norm_1key_scores, 
-                         norm_bigram_freqs, norm_letter_freqs, config, batch_size=100000):
+                         norm_bigram_freqs, norm_letter_freqs, config, batch_size=None):
     """
     Process permutations with progress indicator and memory tracking.
     """
     total_perms = factorial(len(keys))
+    
+    # Calculate optimal batch size based on total permutations
+    if batch_size is None:
+        if total_perms < 1000000:  # Less than 1M permutations
+            batch_size = max(1000, total_perms // 100)  # Divide into ~100 batches
+        else:
+            batch_size = 100000  # Default for large problems
+    
     processed = 0
     results = []
     
-    # Get number of processes for parallel processing
-    n_processes = cpu_count() - 1
+    # Get number of processes - use fewer for smaller problems
+    if total_perms < 1000000:
+        n_processes = min(4, cpu_count() - 1)  # Use max 4 processes for smaller problems
+    else:
+        n_processes = cpu_count() - 1
+    
+    # Assemble right_keys once before processing
+    right_keys = set()
+    for row in ['top', 'home', 'bottom']:
+        right_keys.update(config['layout']['positions']['right'][row])
     
     with tqdm(total=total_perms, desc="Evaluating layouts") as pbar:
         perms_iterator = permutations(keys)
@@ -271,15 +302,10 @@ def process_permutations(letters, keys, norm_2key_scores, norm_1key_scores,
             
             # Split batch for parallel processing
             chunks = np.array_split(batch, n_processes)
-
-            right_keys = set()
-            for row in ['top', 'home', 'bottom']:
-                right_keys.update(config['layout']['positions']['right'][row])
-
             chunk_args = [(chunk, letters, norm_2key_scores, norm_1key_scores, 
                           norm_bigram_freqs, norm_letter_freqs, right_keys, config) 
-                          for chunk in chunks if len(chunk) > 0]
-
+                         for chunk in chunks if len(chunk) > 0]
+            
             # Process chunks in parallel
             with Pool(n_processes) as pool:
                 for chunk_results in pool.imap_unordered(evaluate_chunk, chunk_args):
@@ -290,7 +316,7 @@ def process_permutations(letters, keys, norm_2key_scores, norm_1key_scores,
             processed += len(batch)
             
             # Show memory usage periodically
-            if processed % 100000 == 0:
+            if processed % batch_size == 0:
                 memory_used = get_available_memory() / (1024**3)
                 pbar.set_postfix({'Memory (GB)': f'{memory_used:.1f}'})
     
@@ -368,7 +394,7 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
     # Get template from config and print
     template = config['visualization']['keyboard_template']
     print(template.format(**layout_chars))
-    
+
 def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
                      config: dict,
                      n: int = None) -> None:
@@ -610,7 +636,8 @@ if __name__ == "__main__":
         # Show initial keyboard with positions to fill
         visualize_keyboard_layout(None, "Keys to optimize", config)
 
-        do_parallelize = True
+        # Determine whether to use parallel processing
+        do_parallelize = determine_processing_mode(config)
         if do_parallelize:
             #--------------------------
             # Estimate memory and time:
