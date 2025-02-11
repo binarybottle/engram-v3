@@ -436,6 +436,8 @@ def evaluate_layouts_parallel(
     """
     Evaluate layouts using parallel processing and Numba optimization.
     """
+    start_time = time.time()
+
     if n_processes is None:
         n_processes = cpu_count() - 1
     
@@ -452,21 +454,31 @@ def evaluate_layouts_parallel(
     indices = list(range(len(letters)))
     perms_iterator = permutations(indices)
     
-    results = []
-    while True:
-        batch = list(islice(perms_iterator, batch_size))
-        if not batch:
-            break
+    total_perms = factorial(len(letters))
+    with tqdm(total=total_perms, desc="Evaluating layouts") as pbar:
+        results = []
+        while True:
+            batch = list(islice(perms_iterator, batch_size))
+            if not batch:
+                break
             
-        # Split batch for parallel processing
-        chunks = np.array_split(batch, n_processes)
-        chunk_args = [(chunk, arrays, weights) for chunk in chunks if len(chunk) > 0]
-        
-        # Process chunks in parallel
-        with Pool(n_processes) as pool:
-            chunk_results = pool.map(process_chunk_optimized, chunk_args)
-            for res in chunk_results:
-                results.extend(res)
+            # Split batch for parallel processing
+            chunks = np.array_split(batch, n_processes)
+            chunk_args = [(chunk, arrays, weights) for chunk in chunks if len(chunk) > 0]
+            
+            # Process chunks in parallel
+            with Pool(n_processes) as pool:
+                chunk_results = pool.map(process_chunk_optimized, chunk_args)
+                for res in chunk_results:
+                    results.extend(res)
+                    pbar.update(len(res))  # Update progress bar
+                
+                # Update estimated time remaining
+                if len(results) > batch_size:  # Wait for some data to get better estimate
+                    elapsed = time.time() - start_time
+                    perms_per_second = len(results) / elapsed
+                    eta = (total_perms - len(results)) / perms_per_second
+                    pbar.set_postfix({'ETA': str(timedelta(seconds=int(eta)))})
     
     # Sort and convert indices back to letters
     results.sort(reverse=True, key=lambda x: x[0])
