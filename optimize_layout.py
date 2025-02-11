@@ -556,8 +556,6 @@ if __name__ == "__main__":
         positions = config['optimization']['keys']
         total_perms = factorial(len(positions)) // factorial(len(positions) - len(letters))
         n_processes = cpu_count() - 1
-        print(f"\nOptimization Parameters:")
-        print(f"------------------------")
         print(f"Letters to arrange:      {letters.upper()}")
         print(f"Available positions:     {positions.upper()}")
         print(f"Total permutations:     {total_perms:,}")

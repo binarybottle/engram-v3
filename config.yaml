@@ -15,8 +15,8 @@ paths:
 # Optimization Settings
 #-----------------------------------------------------------------------
 optimization:
-  letters: "cieansthgbm"       # Letters to arrange
-  keys: "asdfjkl;vmn"          # Qwerty keys to position letters
+  letters: "cieansthgbm"      # Letters to arrange
+  keys: "asdfjkl;vmp"          # Qwerty keys to position letters
   scoring:  
     bigram_weight: 0.5  # Weight for bigram / 2-key score
     letter_weight: 0.5  # Weight for letter / 1-key score
