@@ -100,6 +100,16 @@ docs = ["ipython", "matplotlib", "numpydoc", "sphinx"]
 tests = ["pytest", "pytest-cov", "pytest-xdist"]
 
 [[package]]
+name = "factorial"
+version = "1.0.0"
+description = "A simple printer of factorial of a number"
+optional = false
+python-versions = "*"
+files = [
+    {file = "factorial-1.0.0.zip", hash = "sha256:2eb8157f5b77fbe0424570236868818bc015f4c8036933a8b1a34f0a16581bb2"},
+]
+
+[[package]]
 name = "fonttools"
 version = "4.56.0"
 description = "Tools to manipulate font files"
@@ -761,4 +771,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "8a19d7faecef5f2f597d436c3a1b217f5bf890972842d9d9c960c53941557a27"
+content-hash = "533c39b498f9d933b0b497d65be3987a193de4f3cbe5533abdf9cedc64e98a85"
