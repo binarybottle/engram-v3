@@ -447,8 +447,8 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
             'Positions',
             'Rank',
             'Total score',
-            'Bigram score',
-            'Letter score'
+            'Bigram score (unweighted)',
+            'Letter score (unweighted)'
             #'Avg 2-key comfort',
             #'Avg 2-gram frequency',
             #'Avg 1-key comfort',
@@ -462,8 +462,8 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
            
             # Get first bigram score and letter score (they're the same for all entries)
             first_entry = next(iter(detailed_scores.values()))
-            bigram_score = first_entry['bigram_score']
-            letter_score = first_entry['letter_score']
+            unweighted_bigram_score = first_entry['unweighted_bigram_score']
+            unweighted_letter_score = first_entry['unweighted_letter_score']
 
             # Component scores
             """
@@ -490,8 +490,8 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
                 positions,    
                 rank,
                 f"{score:.4f}",
-                f"{bigram_score:.4f}",
-                f"{letter_score:.4f}"
+                f"{unweighted_bigram_score:.4f}",
+                f"{unweighted_letter_score:.4f}"
                 #f"{avg_2key_comfort_score:.4f}",
                 #f"{avg_2gram_freq_score:.4f}",
                 #f"{avg_1key_comfort_score:.4f}",
@@ -780,11 +780,13 @@ def calculate_layout_score(
                     freq_seq2 = bigram_freqs[j, i]
                     bigram_component += (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
     
-    weighted_bigram = bigram_component * bigram_weight / 2.0
+    # Return unweighted components and total weighted score
+    norm_bigram_component = bigram_component / 2.0
+    weighted_bigram = norm_bigram_component * bigram_weight
     weighted_letter = letter_component * letter_weight
     total_score = weighted_bigram + weighted_letter
     
-    return float(total_score), float(weighted_bigram), float(weighted_letter)
+    return float(total_score), float(letter_component), float(norm_bigram_component)
 
 def exact_remaining_arrangements(
     constrained_letters: set,
@@ -894,48 +896,102 @@ def calculate_upper_bound(
     letter_weight: float
 ) -> float:
     """Calculate accurate upper bound on best possible score from this node."""
+
     # Get current score from assigned letters
-    current_score = calculate_layout_score(
+    current_score, current_unweighted_letter_score, current_unweighted_bigram_score = calculate_layout_score(
         mapping, key_LR, comfort_matrix,
         bigram_freqs, letter_freqs, bigram_weight, letter_weight
-    )[0]
+    )
     
-    # All possible directed pairs:
-    #   - Pairs between already assigned letters (already accounted for in current_score)
-    #   - Pairs between assigned and unassigned letters
-    #   - Pairs between unassigned letters
-    n_total = len(mapping)  # Total number of letters
-    n_pairs = n_total * (n_total - 1)  
+    # Total number of letters
+    n_total_letters = len(mapping)  
 
-    # For remaining letters, use best possible scores
-    n_remaining = n_total - depth
-    if n_remaining == 0:
+    # Return the current score if there are no remaining letters
+    n_remaining_letters = n_total_letters - depth
+    if n_remaining_letters == 0:
         return current_score
         
     # Get unassigned letters and available positions
+    # These include letter indices that have -1 in the mapping array, and 
+    # include both constrained and unconstrained letters that haven't been assigned
+    assigned = np.where(mapping >= 0)[0]  # Already placed letters
     unassigned = np.where(mapping < 0)[0]
     available_positions = np.where(~used)[0]
     
-    # Get comfort scores only for available positions
+    #-------------------------------------------------------------------------
+    # Maximum unweighted letter component
+    #-------------------------------------------------------------------------
+    # Get comfort scores for all possible available positions
+    # comfort_matrix[available_positions]
+    #   - Selects rows from comfort_matrix for available positions
+    # [:,available_positions]
+    #   - From those rows, selects columns for available positions
     remaining_comfort_scores = comfort_matrix[available_positions][:,available_positions].flatten()
-    comfort_scores = np.sort(remaining_comfort_scores)[-n_remaining:][::-1]  # highest to lowest
+    comfort_scores = np.sort(remaining_comfort_scores)[-n_remaining_letters:][::-1]  # highest to lowest
     
     # Get frequencies for unassigned letters
     remaining_freqs = letter_freqs[unassigned]
     remaining_freqs = np.sort(remaining_freqs)[::-1]  # highest to lowest
     
-    # Maximum possible letter score contribution
-    max_letter_score = np.sum(comfort_scores * remaining_freqs) * letter_weight
+    # Maximum possible letter score contribution (unweighted)
+    max_letter_component = np.sum(comfort_scores * remaining_freqs)
     
-    # Maximum possible bigram score contribution
+    #-------------------------------------------------------------------------
+    # Maximum unweighted bigram component
+    #-------------------------------------------------------------------------
+    # Check if all remaining positions are on same hand
+    all_left = True
+    all_right = True
+    for pos in available_positions:
+        if key_LR[pos] == 1:  # Right hand
+            all_left = False
+        else:  # Left hand
+            all_right = False
+        if not all_left and not all_right:
+            break
+
+    # Set maximum comfort based on available positions
+    if all_left or all_right:
+        max_comfort = np.max(comfort_matrix)  # Maximum possible comfort value for same-hand bigrams
+    else:
+        max_comfort = 1.0  # Maximum possible comfort value, since positions on both hands available
+        
+    # Set maximum bigram frequency possible between:
+    #  - Already assigned letters and unassigned letters
+    #  - Unassigned constrained letters with other unassigned letters
+    #  - Unassigned unconstrained letters with other unassigned letters
+    #
+    # Get max frequency for any bigram involving at least one unassigned letter
+    max_bigram_freq = 0.0
+    # Check assigned -> unassigned and vice versa
+    for i in assigned:
+        max_bigram_freq = max(max_bigram_freq, np.max(bigram_freqs[i, unassigned]))
+        max_bigram_freq = max(max_bigram_freq, np.max(bigram_freqs[unassigned, i]))
+    # Check unassigned -> unassigned
+    for i in unassigned:
+        for j in unassigned:
+            if i != j:
+                max_bigram_freq = max(max_bigram_freq, bigram_freqs[i, j])
+
+    # Only count pairs involving at least one unassigned letter
+    #   If we have x unassigned letters (n_remaining_letters)
+    #   They can form 2x pairs with each assigned letter "a" (both directions)
+    #   And x(x-1) pairs with other unassigned letters (both directions)
+    #   For a total of: x(x-1) + 2ax pairs
+    #     = x(2a + x -1), where a = n_total_letters - x)
+    #     = x(2 * n_total_letters - x - 1) 
+    n_pairs = n_remaining_letters * (2 * n_total_letters - n_remaining_letters - 1)
+
     # In calculate_layout_score:
     #   bigram_component += (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
     #   weighted_bigram = bigram_component * bigram_weight / 2.0
-    max_comfort = np.max(comfort_matrix)
-    max_bigram_freq = np.max(bigram_freqs)
-    max_bigram_score = n_pairs * max_comfort * max_bigram_freq * bigram_weight / 2.0
+    max_bigram_component = n_pairs * max_comfort * max_bigram_freq / 2.0
     
-    return float(current_score + max_letter_score + max_bigram_score)
+    # Apply weights to total components
+    total_letter_score = (current_unweighted_letter_score + max_letter_component) * letter_weight
+    total_bigram_score = (current_unweighted_bigram_score + max_bigram_component) * bigram_weight
+    
+    return float(total_letter_score + total_bigram_score)
 
 class HeapItem:
     """Helper class to make heap operations work with numpy arrays."""
@@ -958,6 +1014,18 @@ def branch_and_bound_optimal(
     """
     Branch and bound implementation with phased search for constrained letters,
     improved progress monitoring, and checkpoint saving.
+
+    Phase 1:
+      - Finds all valid arrangements of constrained letters ('e', 't') 
+        in constrained positions (F, D, J, K).
+      - Each arrangement marks certain positions as used/assigned.
+
+    Phase 2: For each Phase 1 solution, arrange remaining letters
+      - For each valid arrangement from Phase 1
+        - Uses ONLY the positions that weren't assigned during Phase 1.
+        - In other words, if a Phase 1 solution put 'e' in F and 't' in J, 
+          then Phase 2 would use remaining positions (not F or J)
+          to arrange the remaining letters.
     """
     # Get letters and keys from config
     letters_to_assign = config['optimization']['letters_to_assign']
@@ -1049,9 +1117,8 @@ def branch_and_bound_optimal(
     remaining_positions = n_keys_to_assign - len(constrained_letters)
     remaining_letters = n_letters_to_assign - len(constrained_letters) 
 
-    # For second phase, need to account for positions still available
-    available_unconstrained_positions = remaining_positions - (len(constrained_positions) - len(constrained_letters))
-    total_nodes_second_phase = perm(available_unconstrained_positions, remaining_letters)
+    # For second phase, need to account for all arrangements for each Phase 1 solution
+    total_nodes_second_phase = perm(remaining_positions, remaining_letters) * total_nodes_first_phase
 
     print(f"\nPhase 1 (Constrained letters): {total_nodes_first_phase:,} nodes")
     print(f"Phase 2 (Remaining letters): {total_nodes_second_phase:,} nodes")
@@ -1059,13 +1126,88 @@ def branch_and_bound_optimal(
     # Start search
     heapq.heappush(candidates, HeapItem(-initial_score, 0, initial_mapping, initial_used))
     
-    with tqdm(total=total_nodes_first_phase + total_nodes_second_phase, 
-              desc="Optimizing layout",
-              unit='nodes') as pbar:
-        current_phase = 1
-        phase_start_time = time.time()
-
+    #-------------------------------------------------------------------------
+    # Phase 1
+    #-------------------------------------------------------------------------
+    #   - Finds all valid arrangements of constrained letters ('e', 't') 
+    #     in constrained positions (F, D, J, K).
+    #   - Each arrangement marks certain positions as used/assigned.
+    #-------------------------------------------------------------------------
+    # Add storage for phase 1 solutions
+    phase1_solutions = []
+    
+    # Phase 1: Find all valid arrangements of constrained letters
+    phase1_candidates = [HeapItem(-initial_score, 0, initial_mapping, initial_used)]
+    
+    print("\nPhase 1: Arranging constrained letters...")
+    with tqdm(total=total_nodes_first_phase, desc="Phase 1", unit='nodes') as pbar:
+        while phase1_candidates:
+            candidate = heapq.heappop(phase1_candidates)
+            depth = candidate.depth
+            mapping = candidate.mapping
+            used = candidate.used
+            
+            # Found a valid phase 1 arrangement
+            if all(mapping[i] >= 0 for i in constrained_letter_indices):
+                phase1_solutions.append((mapping.copy(), used.copy()))
+                continue
+                
+            # Try next constrained letter
+            current_letter_idx = -1
+            for i in constrained_letter_indices:
+                if mapping[i] < 0:
+                    current_letter_idx = i
+                    break
+                    
+            # Try each constrained position
+            for pos in constrained_positions:
+                if not used[pos]:
+                    new_mapping = mapping.copy()
+                    new_mapping[current_letter_idx] = pos
+                    new_used = used.copy()
+                    new_used[pos] = True
+                    
+                    phase1_candidates.append(HeapItem(0, depth + 1, new_mapping, new_used))
+            
+            pbar.update(1)
+    
+    print(f"\nFound {len(phase1_solutions)} valid phase 1 arrangements")
+    
+    #-------------------------------------------------------------------------
+    # Phase 2: For each Phase 1 solution, arrange remaining letters
+    #-------------------------------------------------------------------------
+    #   - For each valid arrangement from Phase 1
+    #     - Uses ONLY the positions that weren't assigned during Phase 1.
+    #     - In other words, if a Phase 1 solution put 'e' in F and 't' in J, 
+    #       then Phase 2 would use remaining positions (not F or J)
+    #       to arrange the remaining letters.
+    #-------------------------------------------------------------------------
+    print("\nPhase 2: Arranging remaining letters...")
+    candidates = []
+    
+    # Initialize phase 2 with all phase 1 solutions
+    for phase1_mapping, phase1_used in phase1_solutions:
+        # Calculate initial score for this arrangement
+        score_tuple = calculate_layout_score(
+            phase1_mapping,
+            key_LR,
+            comfort_matrix,
+            bigram_freqs,
+            letter_freqs,
+            bigram_weight,
+            letter_weight
+        )
+        initial_score = score_tuple[0]
+        
+        # Find first unassigned letter's depth
+        initial_depth = sum(1 for i in range(n_letters_to_assign) if phase1_mapping[i] >= 0)
+        
+        candidates.append(HeapItem(-initial_score, initial_depth, phase1_mapping, phase1_used))
+    
+    # Continue with phase 2 using existing branch and bound logic
+    with tqdm(total=total_nodes_second_phase, desc="Phase 2", unit='nodes') as pbar:
         while candidates:
+
             # Memory check
             if psutil.virtual_memory().percent > memory_threshold_gb * 100:
                 print("\nWarning: Memory usage high, saving checkpoint and stopping")
@@ -1073,8 +1215,6 @@ def branch_and_bound_optimal(
                     'candidates': candidates,
                     'top_n_solutions': top_n_solutions,
                     'processed_nodes': processed_nodes,
-                    'current_phase': current_phase,
-                    'phase_start_time': phase_start_time,
                     'start_time': start_time
                 })
                 break
@@ -1087,10 +1227,13 @@ def branch_and_bound_optimal(
             used = candidate.used
             
             # Process complete solutions
+            # Maintains a priority queue of the best n keyboard layouts found so far, 
+            # constantly updating it as better solutions are discovered.
             if depth == n_letters_to_assign:
                 if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
                     continue  # Skip invalid solutions
                     
+                # 1. Calculate score for a given keyboard layout
                 score_tuple = calculate_layout_score(
                     mapping,
                     key_LR,
@@ -1100,26 +1243,39 @@ def branch_and_bound_optimal(
                     bigram_weight,
                     letter_weight
                 )
-                total_score, bigram_score, letter_score = score_tuple
+                total_score, unweighted_bigram_score, unweighted_letter_score = score_tuple
 
+                # 2. Check if this solution should be considered for the top solutions
                 if (len(top_n_solutions) < n_solutions or 
                     total_score > worst_top_n_score):
+
+                    # 3. If the solution qualifies, create a solution tuple
+                    # Storing the unweighted components allows for:
+                    #  - Reweighting the results later without recalculating the base scores
+                    #  - Analyzing the relative contributions of bigrams vs individual letters
+                    #  - Validating or debugging the scoring system
+                    #  - Generating detailed reports about layout performance
                     solution = (
-                        float(total_score),
-                        float(bigram_score),
-                        float(letter_score),
-                        mapping.tolist()
+                        float(unweighted_bigram_score),   # Unweighted component
+                        float(unweighted_letter_score),   # Unweighted component
+                        mapping.tolist()       # The actual layout
                     )
+
+                    # 4. Create a heap item
                     heap_item = (-float(total_score), len(top_n_solutions), solution)
+
+                    # 5. Manage the heap size
                     heapq.heappush(top_n_solutions, heap_item)
                     
                     if len(top_n_solutions) > n_solutions:
                         heapq.heappop(top_n_solutions)
                     
+                    # Update the worst score for future comparisons
                     if top_n_solutions:
                         worst_top_n_score = -top_n_solutions[0][0]
-                        print(f"\nNew solution found (score: {total_score:.4f})")
-                        print(f"Current best score: {-top_n_solutions[0][0]:.4f}")
+                        # DEBUG
+                        #print(f"\nNew solution found (score: {total_score:.4f})")
+                        #print(f"Current best score: {-top_n_solutions[0][0]:.4f}")
                 
                 processed_nodes += 1
                 pbar.update(1)
@@ -1138,30 +1294,12 @@ def branch_and_bound_optimal(
                     processed_nodes += 1
                     pbar.update(1)
                     continue
-            
+
             # Try each available position
             nodes_at_depth = 0
-            current_letter = letters_to_assign[depth]
-            is_constrained_letter = current_letter in constrained_letters
 
-            # Get valid positions for current letter
-            valid_positions = []
-            if is_constrained_letter:
-                # Constrained letter can only go in constrained positions
-                valid_positions = [pos for pos in constrained_positions if not used[pos]]
-            else:
-                # Count remaining constrained letters and positions
-                remaining_constrained_letters = sum(1 for i in constrained_letter_indices if mapping[i] < 0)
-                remaining_constrained_positions = [pos for pos in constrained_positions if not used[pos]]
-                
-                if remaining_constrained_letters > len(remaining_constrained_positions):
-                    # Not enough constrained positions left, this branch is invalid
-                    continue
-                
-                # Can use any position except those needed for remaining constrained letters
-                positions_needed_for_constrained = set(remaining_constrained_positions[:remaining_constrained_letters])
-                valid_positions = [pos for pos in range(n_keys_to_assign) 
-                                   if not used[pos] and pos not in positions_needed_for_constrained]
+            # In phase 2, just use any unassigned position
+            valid_positions = [pos for pos in range(n_keys_to_assign) if not used[pos]]
             
             for pos in valid_positions:
                 # Create new state
@@ -1187,7 +1325,12 @@ def branch_and_bound_optimal(
                 new_score = score_tuple[0]
                 
                 # Add to candidates if promising
-                if len(top_n_solutions) < n_solutions or new_score > worst_top_n_score:
+                upper_bound = calculate_upper_bound(
+                    new_mapping, depth + 1, new_used, key_LR, comfort_matrix,
+                    letter_freqs, bigram_freqs, bigram_weight, letter_weight
+                )
+                
+                if len(top_n_solutions) < n_solutions:
                     heapq.heappush(
                         candidates,
                         HeapItem(-new_score, depth + 1, new_mapping, new_used)
@@ -1201,43 +1344,28 @@ def branch_and_bound_optimal(
             # Update progress and save checkpoint if needed
             current_time = time.time()
             if current_time - last_update_time >= update_interval:
-                elapsed = current_time - phase_start_time
+                elapsed = current_time - start_time
                 if elapsed > 0:
                     nodes_per_second = processed_nodes / elapsed
                     
-                    # Detect phase change
-                    if current_phase == 1 and all(mapping[i] >= 0 for i in constrained_letter_indices):
-                        print("\nPhase 1 complete!")
-                        print(f"Time taken: {str(timedelta(seconds=int(elapsed)))}")
-                        current_phase = 2
-                        phase_start_time = current_time
-                        processed_nodes = 0
-                    
-                    # Calculate remaining time for current phase
-                    if current_phase == 1:
-                        remaining_nodes = total_nodes_first_phase - processed_nodes
-                    else:
-                        remaining_nodes = total_nodes_second_phase - processed_nodes
-                    
+                    # Calculate remaining time
+                    remaining_nodes = total_nodes_second_phase - processed_nodes
                     eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else float('inf')
                     
                     pbar.set_postfix({
-                        'Phase': f"{current_phase}/2",
                         'Nodes/sec': f"{nodes_per_second:.0f}",
                         'ETA': str(timedelta(seconds=int(eta_seconds))),
                         'Memory': f"{psutil.Process().memory_info().rss / 1024**3:.1f}GB"
                     })
                 
                 last_update_time = current_time
-            
+
             # Save checkpoint if needed
             if processed_nodes - last_checkpoint_time >= checkpoint_interval:
                 save_checkpoint(checkpoint_path, {
                     'candidates': candidates,
                     'top_n_solutions': top_n_solutions,
                     'processed_nodes': processed_nodes,
-                    'current_phase': current_phase,
-                    'phase_start_time': phase_start_time,
                     'start_time': start_time
                 })
                 last_checkpoint_time = processed_nodes
@@ -1246,8 +1374,9 @@ def branch_and_bound_optimal(
     solutions = []
     print(f"\nConverting {len(top_n_solutions)} solutions...")
     while top_n_solutions:
-        _, _, solution = heapq.heappop(top_n_solutions)
-        total_score, bigram_score, letter_score, mapping_list = solution
+        neg_score, _, solution = heapq.heappop(top_n_solutions)
+        total_score = -neg_score  # Get the actual score from the heap item
+        unweighted_bigram_score, unweighted_letter_score, mapping_list = solution 
         mapping = np.array(mapping_list, dtype=np.int32)
         letter_mapping = dict(zip(letters_to_assign, [keys_to_assign[i] for i in mapping]))
         solutions.append((
@@ -1255,8 +1384,8 @@ def branch_and_bound_optimal(
             letter_mapping,
             {'total': {
                 'total_score': total_score,
-                'bigram_score': bigram_score,
-                'letter_score': letter_score
+                'unweighted_bigram_score': unweighted_bigram_score,
+                'unweighted_letter_score': unweighted_letter_score
             }}
         ))
     
@@ -1356,8 +1485,8 @@ def optimize_layout(config: dict) -> None:
         results,
         key=lambda x: (
             x[0],  # total_score
-            x[2]['total']['bigram_score'],  # use bigram score as secondary sort
-            x[2]['total']['letter_score']   # use letter score as tertiary sort
+            x[2]['total']['unweighted_bigram_score'],  # use bigram score as secondary sort
+            x[2]['total']['unweighted_letter_score']   # use letter score as tertiary sort
         ),
         reverse=True
     )
