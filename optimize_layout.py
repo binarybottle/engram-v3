@@ -36,7 +36,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
     """Load configuration from yaml file and normalize letter case and numeric types."""
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-        
+    
     # Convert weights to float32
     config['optimization']['scoring']['bigram_weight'] = np.float32(
         config['optimization']['scoring']['bigram_weight']
@@ -52,23 +52,24 @@ def load_config(config_path: str = "config.yaml") -> dict:
                 config['layout']['positions'][side][row] = [
                     k.lower() for k in config['layout']['positions'][side][row]
                 ]
-
-    # Normalize letters and keys to lowercase for internal processing
-    config['optimization']['letters'] = config['optimization']['letters'].lower()
-    config['optimization']['keys'] = config['optimization']['keys'].lower()
     
-    # Normalize letters_assigned and keys_assigned if they exist
-    if 'letters_assigned' in config['optimization']:
-        config['optimization']['letters_assigned'] = config['optimization']['letters_assigned'].lower()
-    if 'keys_assigned' in config['optimization']:
-        config['optimization']['keys_assigned'] = config['optimization']['keys_assigned'].lower()
-            
+    # Normalize strings to lowercase
+    optimization = config['optimization']
+    for key in ['letters', 'keys', 
+                'letters_to_display', 'keys_to_display',
+                'letters_to_constrain', 'keys_to_constrain']:
+        if key in optimization:
+            optimization[key] = optimization[key].lower()
+    
     # Normalize right_to_left mappings
     right_to_left = config['layout']['position_mappings']['right_to_left']
     normalized_mappings = {}
     for key, value in right_to_left.items():
         normalized_mappings[key.lower()] = value.lower()
     config['layout']['position_mappings']['right_to_left'] = normalized_mappings
+    
+    # Validate constraints
+    validate_optimization_inputs(config)
     
     return config
 
@@ -168,59 +169,160 @@ def load_and_normalize_frequencies(onegrams: str,
     
     return norm_letter_freqs, norm_bigram_freqs
 
-def validate_input(letters: str, keys: str) -> None:
-    """
-    Validate input parameters.
-    """
+def validate_optimization_inputs(config):
+
+    # Get letters/keys from config
+    letters_to_assign = set(config['optimization']['letters_to_assign'].lower())
+    keys_to_assign = set(config['optimization']['keys_to_assign'].lower())
+    letters_to_constrain = set(config['optimization'].get('letters_to_constrain', '').lower())
+    keys_to_constrain = set(config['optimization'].get('keys_to_constrain', '').lower())
+    letters_assigned = set(config['optimization'].get('letters_assigned', '').lower())
+    keys_assigned = set(config['optimization'].get('keys_assigned', '').lower())
+
     # Check for duplicates in letters
-    if len(set(letters)) != len(letters):
-        raise ValueError(f"Duplicate letters: {letters}")
+    if len(set(letters_to_assign)) != len(letters_to_assign):
+        raise ValueError(f"Duplicate letters: {letters_to_assign}")
     
     # Check for duplicates in keys
-    if len(set(keys)) != len(keys):
-        raise ValueError(f"Duplicate keys: {keys}")
+    if len(set(keys_to_assign)) != len(keys_to_assign):
+        raise ValueError(f"Duplicate keys: {keys_to_assign}")
     
     # Check that we have enough positions
-    if len(letters) > len(keys):
-        raise ValueError(f"More letters ({len(letters)}) than available positions ({len(keys)})")
+    if len(letters_to_assign) > len(keys_to_assign):
+        raise ValueError(f"More letters ({len(letters_to_assign)}) than available positions ({len(keys_to_assign)})")
 
+    # Validate no overlap between assigned and to_assign/to_constrain
+    if not letters_assigned.isdisjoint(letters_to_assign):
+        raise ValueError("letters_to_assign/constrain contains letters that are already assigned")
+    if not keys_assigned.isdisjoint(keys_to_assign):
+        raise ValueError("keys_to_assign/constrain contains keys that are already assigned")
+        
+    # Check if letters_to_constrain is subset of letters
+    if not letters_to_constrain.issubset(letters_to_assign):
+        invalid_letters = letters_to_constrain - letters_to_assign
+        raise ValueError(f"letters_to_constrain contains letters not in main letters set: {invalid_letters}")
+
+    # Check if keys_to_constrain is subset of keys
+    if not keys_to_constrain.issubset(keys_to_assign):
+        invalid_keys = keys_to_constrain - keys_to_assign
+        raise ValueError(f"keys_to_constrain contains keys not in main keys set: {invalid_keys}")
+    
+    # Check if we have enough constraint keys for constraint letters
+    if len(letters_to_constrain) > len(keys_to_constrain):
+        raise ValueError(
+            f"Not enough constraint keys ({len(keys_to_constrain)}) "
+            f"for constraint letters ({len(letters_to_constrain)})"
+        )
+
+    # Check for duplicates in assigned letters/keys
+    if len(set(letters_assigned)) != len(letters_assigned):
+        raise ValueError(f"Duplicate assigned letters: {letters_assigned}")
+    if len(set(keys_assigned)) != len(keys_assigned):
+        raise ValueError(f"Duplicate assigned keys: {keys_assigned}")
+    
+    # Check that assigned letters and keys have matching lengths
+    if len(letters_assigned) != len(keys_assigned):
+        raise ValueError(
+            f"Mismatched number of assigned letters ({len(letters_assigned)}) "
+            f"and assigned keys ({len(keys_assigned)})"
+        )
+
+    # Check no overlap between assigned and constrained
+    if not letters_assigned.isdisjoint(letters_to_constrain):
+        overlap = letters_assigned.intersection(letters_to_constrain)
+        raise ValueError(f"letters_to_constrain contains assigned letters: {overlap}")
+    if not keys_assigned.isdisjoint(keys_to_constrain):
+        overlap = keys_assigned.intersection(keys_to_constrain)
+        raise ValueError(f"keys_to_constrain contains assigned keys: {overlap}")
+
+    # Check for duplicates in constrained letters/keys
+    if len(set(letters_to_constrain)) != len(letters_to_constrain):
+        raise ValueError(f"Duplicate constrained letters: {letters_to_constrain}")
+    if len(set(keys_to_constrain)) != len(keys_to_constrain):
+        raise ValueError(f"Duplicate constrained keys: {keys_to_constrain}")
+ 
 def prepare_arrays(
-    letters: str,
-    keys: str,
+    letters_to_assign: str,
+    keys_to_assign: str,
     right_keys: Set[str],
     norm_2key_scores: Dict[Tuple[str, str], float],
     norm_1key_scores: Dict[str, float],
     norm_bigram_freqs: Dict[Tuple[str, str], float],
-    norm_letter_freqs: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    norm_letter_freqs: Dict[str, float]
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Prepare input arrays for the numba-optimized scoring function.
-    Modified to handle N<M case.
+    Prepare input arrays for the scoring function.
     """
-    n_letters = len(letters)
-    n_positions = len(keys)
+    n_letters_to_assign = len(letters_to_assign)
+    n_keys_to_assign = len(keys_to_assign)
     
     # Create key position array (1 for right side, 0 for left side)
-    key_LR = np.array([1 if k in right_keys else 0 for k in keys], dtype=np.int8)
+    key_LR = np.array([1 if k in right_keys else 0 for k in keys_to_assign], dtype=np.int8)
     
     # Create comfort score matrix for all possible positions
-    comfort_matrix = np.zeros((n_positions, n_positions), dtype=np.float32)
-    for i, k1 in enumerate(keys):
-        for j, k2 in enumerate(keys):
-            if i == j:
-                comfort_matrix[i, j] = np.float32(norm_1key_scores.get(k1, 0.0))
-            else:
-                comfort_matrix[i, j] = np.float32(norm_2key_scores.get((k1, k2), 0.0))
+    comfort_matrix = np.zeros((n_keys_to_assign, n_keys_to_assign), dtype=np.float32)
+    for i, k1 in enumerate(keys_to_assign):
+        for j, k2 in enumerate(keys_to_assign):
+            if i == j:  # Single key comfort
+                comfort_matrix[i, j] = norm_1key_scores.get(k1.lower(), 0.0)
+            else:  # Two key comfort
+                comfort_matrix[i, j] = norm_2key_scores.get((k1.lower(), k2.lower()), 0.0)
+    
+    print("Comfort matrix:")
+    print(comfort_matrix)
     
     # Create letter frequency array
-    letter_freqs = np.array([norm_letter_freqs.get(l, 0.0) for l in letters], dtype=np.float32)
+    letter_freqs = np.array([
+        norm_letter_freqs.get(l.lower(), 0.0) for l in letters_to_assign
+    ], dtype=np.float32)
     
-    # Create bigram frequency matrix for letters only
-    bigram_freqs = np.zeros((n_letters, n_letters), dtype=np.float32)
-    for i, l1 in enumerate(letters):
-        for j, l2 in enumerate(letters):
-            bigram_freqs[i, j] = np.float32(norm_bigram_freqs.get((l1, l2), 0.0))
+    # Create bigram frequency matrix
+    bigram_freqs = np.zeros((n_letters_to_assign, n_letters_to_assign), dtype=np.float32)
+    for i, l1 in enumerate(letters_to_assign):
+        for j, l2 in enumerate(letters_to_assign):
+            bigram_freqs[i, j] = norm_bigram_freqs.get((l1.lower(), l2.lower()), 0.0)
     
     return key_LR, comfort_matrix, letter_freqs, bigram_freqs
+
+def prepare_assigned_indices(letters: str, letters_assigned: str, keys: str, keys_assigned: str) -> np.ndarray:
+    """
+    Create array of assigned positions (-1 for unassigned letters)
+    
+    Args:
+        letters: String of all letters being optimized
+        letters_assigned: String of pre-assigned letters
+        keys: String of all available keys
+        keys_assigned: String of keys where letters are pre-assigned
+        
+    Returns:
+        numpy array of indices where assigned letters are marked with their position index
+        and unassigned letters are marked with -1
+        
+    Example:
+        letters = "abcdef"
+        letters_assigned = "ac"
+        keys = "FDSVRA"
+        keys_assigned = "FR"
+        Result: [-1, 0, -1, 1, -1, -1] # 'a' assigned to position 0 (F), 'c' to position 1 (R)
+    """
+    n_letters = len(letters)
+    assigned_indices = np.full(n_letters, -1, dtype=np.int32)
+    
+    if letters_assigned and keys_assigned:
+        # Create letter to index mapping for input letters
+        letter_to_idx = {letter: idx for idx, letter in enumerate(letters)}
+        # Create key to position mapping for input keys
+        key_to_pos = {key: pos for pos, key in enumerate(keys)}
+        
+        # For each assigned letter-key pair
+        for letter, key in zip(letters_assigned, keys_assigned):
+            # Only process if both letter and key are in our mappings
+            if letter in letter_to_idx and key in key_to_pos:
+                idx = letter_to_idx[letter]
+                pos = key_to_pos[key]
+                assigned_indices[idx] = pos
+                
+    return assigned_indices
 
 def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
                         config: dict,
@@ -237,8 +339,12 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
         writer = csv.writer(f)
         
         # Write header with configuration info
-        writer.writerow(['Letters', config['optimization']['letters']])
-        writer.writerow(['Available Positions', config['optimization']['keys']])
+        writer.writerow(['Letters to assign', config['optimization']['letters_to_assign']])
+        writer.writerow(['Available keys', config['optimization']['keys_to_assign']])
+        writer.writerow(['Letters to constrain', config['optimization']['letters_to_constrain']])
+        writer.writerow(['Constraint keys', config['optimization']['keys_to_constrain']])
+        writer.writerow(['Assigned letters', config['optimization']['letters_assigned']])
+        writer.writerow(['Assigned keys', config['optimization']['keys_assigned']])
         writer.writerow(['Bigram weight', config['optimization']['scoring']['bigram_weight']])
         writer.writerow(['Letter weight', config['optimization']['scoring']['letter_weight']])
         writer.writerow([])  # Empty row for separation
@@ -305,16 +411,9 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
 #-----------------------------------------------------------------------------
 # Visualizing functions
 #-----------------------------------------------------------------------------
-def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layout", config: dict = None, letters_assigned: str = None, keys_assigned: str = None) -> None:
+def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layout", config: dict = None, letters_to_display: str = None, keys_to_display: str = None) -> None:
     """
     Print a visual representation of the keyboard layout showing both mapped and assigned letters.
-    
-    Args:
-        mapping: Dictionary mapping letters to key positions (or None)
-        title: Title to display on the layout
-        config: Configuration dictionary
-        letters_assigned: String of letters to be shown in specific positions
-        keys_assigned: String of keys where assigned letters should be shown
     """
     # Key mapping for special characters
     key_mapping = {
@@ -339,28 +438,36 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
         'm': ' ', 'cm': ' ', 'dt': ' ', 'sl': ' '
     }
     
-    # First, mark positions to be filled
-    if not mapping and not (letters_assigned and keys_assigned):
-        for key in config['optimization']['keys']:
-            converted_key = key_mapping.get(key, key)
-            layout_chars[converted_key] = '-'
+    # First apply assigned letters from config
+    letters_assigned = config['optimization'].get('letters_assigned', '').lower()
+    keys_assigned = config['optimization'].get('keys_assigned', '').lower()
     
-    # Fill in letters from letters_assigned and keys_assigned
     if letters_assigned and keys_assigned:
-        if len(letters_assigned) != len(keys_assigned):
-            raise ValueError("letters_assigned and keys_assigned must have the same length")
-            
         for letter, key in zip(letters_assigned, keys_assigned):
-            # Convert special characters to their internal representation
-            converted_key = key_mapping.get(key, key)
-            # Use lowercase for assigned letters
+            converted_key = key_mapping.get(key.lower(), key.lower())
+            layout_chars[converted_key] = letter.lower()
+    
+    # Then mark positions to be filled from keys_to_assign
+    if not mapping:
+        keys_to_mark = config['optimization'].get('keys_to_assign', '').lower()
+        for key in keys_to_mark:
+            if key not in keys_assigned:  # Skip if already assigned
+                converted_key = key_mapping.get(key, key)
+                layout_chars[converted_key] = '-'
+    
+    # Fill in letters from letters_to_display and keys_to_display
+    if letters_to_display and keys_to_display:
+        if len(letters_to_display) != len(keys_to_display):
+            raise ValueError("letters_to_display and keys_to_display must have the same length")
+            
+        for letter, key in zip(letters_to_display, keys_to_display):
+            converted_key = key_mapping.get(key.lower(), key.lower())
             layout_chars[converted_key] = letter.lower()
     
     # Fill in letters from mapping
     if mapping:
         for letter, key in mapping.items():
-            # Convert special characters to their internal representation
-            converted_key = key_mapping.get(key, key)
+            converted_key = key_mapping.get(key.lower(), key.lower())
             current_char = layout_chars[converted_key]
             
             # If there's already an assigned letter, combine them
@@ -378,8 +485,8 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
 def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
                       config: dict,
                       n: int = None,
-                      letters_assigned: str = None,
-                      keys_assigned: str = None) -> None:
+                      letters_to_display: str = None,
+                      keys_to_display: str = None) -> None:
     """
     Print the top N results with their scores and mappings.
     
@@ -387,8 +494,8 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
         results: List of (score, mapping, detailed_scores) tuples
         config: Configuration dictionary
         n: Number of layouts to display (defaults to config['optimization']['nlayouts'])
-        letters_assigned: Letters that have already been assigned
-        keys_assigned: Keys that have already been assigned
+        letters_to_display: Letters that have already been assigned
+        keys_to_display: Keys that have already been assigned
     """
     if n is None:
         n = config['optimization'].get('nlayouts', 5)
@@ -399,8 +506,8 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
         visualize_keyboard_layout(
             mapping=mapping,
             title=f"Layout #{i}", 
-            letters_assigned=letters_assigned,
-            keys_assigned=keys_assigned,
+            letters_to_display=letters_to_display,
+            keys_to_display=keys_to_display,
             config=config
         )
         
@@ -460,15 +567,15 @@ def calculate_memory_upper_bound(n_letters: int, n_positions: int) -> dict:
 
 def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidates: int) -> dict:
     """
-    Estimate memory requirements more accurately.
+    Estimate memory requirements more accurately for branch and bound search.
     """
     # Fixed sizes for data types in bytes
     INT32_SIZE = 4
     INT8_SIZE = 1
-    FLOAT32_SIZE = 4  # Changed from FLOAT64_SIZE
+    FLOAT32_SIZE = 4
     BOOL_SIZE = 1
     
-    # Core data structure sizes
+    # Core data structure sizes (these are fixed overhead)
     mapping_size = n_letters * INT32_SIZE
     position_size = n_positions * BOOL_SIZE
     comfort_matrix_size = n_positions * n_positions * FLOAT32_SIZE
@@ -478,40 +585,61 @@ def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidate
     
     # Size of each candidate in the priority queue
     bytes_per_candidate = (
-        mapping_size +    # partial_mapping array
+        mapping_size +   # partial_mapping array
         FLOAT32_SIZE +   # score
         INT32_SIZE +     # depth
         position_size    # positions boolean array
     )
     
-    # Calculate maximum queue size - use factorial for more accurate estimation
-    max_queue_size = 0
-    for depth in range(n_letters):
-        # For each depth, calculate number of possible states
-        branches = min(max_candidates, perm(n_positions, depth + 1))
-        max_queue_size += branches
+    # For large problems, we need to estimate the working set size
+    # Assume we'll keep max_candidates at each depth
+    max_queue_size = max_candidates * n_letters
     
-    # Calculate total memory
-    queue_memory = max_queue_size * bytes_per_candidate
+    # Calculate branching factor at each depth
+    # For depth d, we have (n_positions - d) choices
+    avg_branching_factor = sum(n_positions - d for d in range(n_letters)) / n_letters
+    
+    # Estimate working memory needed for search
+    working_memory = max_queue_size * bytes_per_candidate * avg_branching_factor
+    
+    # Calculate total memory including fixed overhead
     core_memory = (comfort_matrix_size + freq_matrix_size + 
                   letter_freq_size + key_lr_size)
-    total_bytes = queue_memory + core_memory
+    total_bytes = working_memory + core_memory
+    
+    # Add safety margin (50% extra)
+    total_bytes = total_bytes * 1.5
     
     # Get available system memory
     available_memory = psutil.virtual_memory().available
     
+    # Convert to appropriate units
+    total_mb = total_bytes / (1024 * 1024)
+    total_gb = total_bytes / (1024 * 1024 * 1024)
+    available_gb = available_memory / (1024 * 1024 * 1024)
+    
+    # Calculate statistics about the search space
+    total_arrangements = perm(n_positions, n_letters)
+    estimated_nodes_per_sec = 10000  # Based on typical performance
+    estimated_seconds = total_arrangements / estimated_nodes_per_sec
+    estimated_runtime = str(timedelta(seconds=int(estimated_seconds)))
+    
     return {
         'estimated_bytes': total_bytes,
-        'estimated_mb': total_bytes / (1024 * 1024),
-        'estimated_gb': total_bytes / (1024 * 1024 * 1024),
-        'available_memory_gb': available_memory / (1024 * 1024 * 1024),
+        'estimated_mb': total_mb,
+        'estimated_gb': total_gb,
+        'available_memory_gb': available_gb,
         'memory_sufficient': total_bytes < (available_memory * 0.8),
+        'estimated_runtime': estimated_runtime,
+        'search_space_size': total_arrangements,
         'details': {
-            'mapping_size_mb': mapping_size / (1024 * 1024),
             'comfort_matrix_mb': comfort_matrix_size / (1024 * 1024),
             'freq_matrix_mb': freq_matrix_size / (1024 * 1024),
-            'queue_memory_mb': queue_memory / (1024 * 1024),
-            'core_memory_mb': core_memory / (1024 * 1024)
+            'working_memory_mb': working_memory / (1024 * 1024),
+            'core_memory_mb': core_memory / (1024 * 1024),
+            'bytes_per_candidate': bytes_per_candidate,
+            'max_queue_size': max_queue_size,
+            'avg_branching_factor': avg_branching_factor
         }
     }
 
@@ -583,7 +711,7 @@ def calculate_upper_bound(
 
 @jit(nopython=True, fastmath=True)
 def calculate_layout_score_numba(
-    letter_indices: np.ndarray,  
+    letter_indices: np.ndarray,
     key_LR: np.ndarray,   
     comfort_matrix: np.ndarray,  
     bigram_freqs: np.ndarray,    
@@ -594,25 +722,31 @@ def calculate_layout_score_numba(
     """
     Calculate layout score with safe array comparisons.
     """
-    n = len(letter_indices)
-    positions = np.zeros(n, dtype=np.int64)
-    for i in range(n):
-        positions[i] = letter_indices[i]
+    # Check if we have any valid positions
+    has_valid = False
+    for i in range(len(letter_indices)):
+        if letter_indices[i] >= 0:
+            has_valid = True
+            break
     
+    if not has_valid:
+        return 0.0, 0.0, 0.0
+        
+    # Calculate single-letter component
     letter_component = np.float32(0.0)
-    for i in range(n):
-        pos = positions[i]
-        if pos >= 0:  # Ensure valid position
+    for i in range(len(letter_indices)):
+        pos = letter_indices[i]
+        if pos >= 0:
             letter_component += comfort_matrix[pos, pos] * letter_freqs[i]
     
+    # Calculate bigram component
     bigram_component = np.float32(0.0)
-    for i in range(n):
-        for j in range(i + 1, n):
-            pos1 = positions[i]
-            pos2 = positions[j]
-            
-            if pos1 >= 0 and pos2 >= 0:  # Ensure valid positions
-                if key_LR[pos1] == key_LR[pos2]:  # Compare scalars
+    for i in range(len(letter_indices)):
+        pos1 = letter_indices[i]
+        if pos1 >= 0:
+            for j in range(i + 1, len(letter_indices)):
+                pos2 = letter_indices[j]
+                if pos2 >= 0 and key_LR[pos1] == key_LR[pos2]:
                     comfort_seq1 = comfort_matrix[pos1, pos2]
                     freq_seq1 = bigram_freqs[i, j]
                     comfort_seq2 = comfort_matrix[pos2, pos1]
@@ -623,7 +757,61 @@ def calculate_layout_score_numba(
     weighted_letter = letter_component * letter_weight
     total_score = weighted_bigram + weighted_letter
     
-    return total_score, weighted_bigram, weighted_letter
+    return float(total_score), float(weighted_bigram), float(weighted_letter)
+
+def calculate_layout_score_debug(
+    letter_indices: np.ndarray,
+    key_LR: np.ndarray,   
+    comfort_matrix: np.ndarray,  
+    bigram_freqs: np.ndarray,    
+    letter_freqs: np.ndarray,    
+    bigram_weight: float,
+    letter_weight: float
+) -> tuple:
+    """Debug version of calculate_layout_score_numba without JIT compilation."""
+    print(f"\nDebug info:")
+    print(f"letter_indices: {letter_indices}")
+    
+    # Only calculate scores for valid positions
+    valid_positions = letter_indices >= 0
+    if not np.any(valid_positions):
+        print("No valid positions found, returning zeros")
+        return 0.0, 0.0, 0.0
+        
+    # Calculate single-letter component
+    letter_component = np.float32(0.0)
+    for i in range(len(letter_indices)):
+        pos = letter_indices[i]
+        if pos >= 0:
+            curr_comfort = comfort_matrix[pos, pos]
+            curr_freq = letter_freqs[i]
+            curr_score = curr_comfort * curr_freq
+            letter_component += curr_score
+            print(f"Letter {i}: pos={pos}, comfort={curr_comfort}, freq={curr_freq}, score={curr_score}")
+    
+    # Calculate bigram component
+    bigram_component = np.float32(0.0)
+    for i in range(len(letter_indices)):
+        pos1 = letter_indices[i]
+        if pos1 >= 0:
+            for j in range(i + 1, len(letter_indices)):
+                pos2 = letter_indices[j]
+                if pos2 >= 0 and key_LR[pos1] == key_LR[pos2]:
+                    comfort_seq1 = comfort_matrix[pos1, pos2]
+                    freq_seq1 = bigram_freqs[i, j]
+                    comfort_seq2 = comfort_matrix[pos2, pos1]
+                    freq_seq2 = bigram_freqs[j, i]
+                    curr_score = (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
+                    bigram_component += curr_score
+                    print(f"Bigram {i}-{j}: pos1={pos1}, pos2={pos2}, comfort1={comfort_seq1}, "
+                          f"freq1={freq_seq1}, comfort2={comfort_seq2}, freq2={freq_seq2}, score={curr_score}")
+    
+    weighted_bigram = bigram_component * bigram_weight / 2.0
+    weighted_letter = letter_component * letter_weight
+    total_score = weighted_bigram + weighted_letter
+    
+    print(f"Final scores: total={total_score}, bigram={weighted_bigram}, letter={weighted_letter}")
+    return float(total_score), float(weighted_bigram), float(weighted_letter)
 
 class HeapItem:
     """Helper class to make heap operations work with numpy arrays."""
@@ -637,47 +825,90 @@ class HeapItem:
         return self.score < other.score
 
 def branch_and_bound_optimal(
-    letters: str,
-    keys: str,
     arrays: tuple,
     weights: tuple,
+    config: dict,
     n_solutions: int = 5,
-    max_candidates: int = 1000,
     memory_threshold_gb: float = 0.9
 ) -> List[Tuple[float, Dict[str, str], Dict]]:
     """
-    Branch and bound implementation that handles both N=M and N<M cases efficiently.
+    Branch and bound implementation with support for assigned letters.
     """
-    n_letters = len(letters)
-    n_positions = len(keys)
-    is_full_layout = n_letters == n_positions
+    # Get letters and keys from config
+    letters_to_assign = config['optimization']['letters_to_assign']
+    keys_to_assign = config['optimization']['keys_to_assign']
+    letters_to_constrain = config['optimization'].get('letters_to_constrain', '')
+    keys_to_constrain = config['optimization'].get('keys_to_constrain', '')
+    letters_assigned = config['optimization'].get('letters_assigned', '')
+    keys_assigned = config['optimization'].get('keys_assigned', '')
+
+    # Convert to lowercase for consistency
+    letters_to_assign = letters_to_assign.lower()
+    keys_to_assign = keys_to_assign.upper()  # Convention: keys are uppercase
+    letters_to_constrain = letters_to_constrain.lower()
+    keys_to_constrain = keys_to_constrain.upper()
+    letters_assigned = letters_assigned.lower()
+    keys_assigned = keys_assigned.upper()
+
+    n_letters_to_assign = len(letters_to_assign)
+    n_keys_to_assign = len(keys_to_assign)
+    is_full_layout = n_letters_to_assign == n_keys_to_assign
     
     key_LR, comfort_matrix, letter_freqs, bigram_freqs = arrays
     bigram_weight, letter_weight = weights
     
-    # Calculate total nodes for progress tracking
-    total_nodes = 0
-    for depth in range(n_letters):
-        if is_full_layout:
-            total_nodes += perm(n_positions - depth, 1)
-        else:
-            total_nodes += comb(n_positions - depth, 1)
-    
+    # Initialize candidates list and top solutions
     candidates = []
     top_n_solutions = []
     worst_top_n_score = float('-inf')
     
-    initial_mapping = np.full(n_letters, -1, dtype=np.int32)
-    initial_used = np.zeros(n_positions, dtype=bool)
+    # Initialize mapping with all positions as -1
+    initial_mapping = np.full(n_letters_to_assign, -1, dtype=np.int32)
     
+    # Create initial used positions array
+    initial_used = np.zeros(n_keys_to_assign, dtype=bool)
+    
+    # Handle assigned letters if any
+    if letters_assigned:
+        letter_to_idx = {letter: idx for idx, letter in enumerate(letters_to_assign)}
+        key_to_pos = {key: pos for pos, key in enumerate(keys_to_assign)}
+        
+        for letter, key in zip(letters_assigned, keys_assigned):
+            if letter in letter_to_idx and key in key_to_pos:
+                idx = letter_to_idx[letter]
+                pos = key_to_pos[key]
+                initial_mapping[idx] = pos
+                initial_used[pos] = True
+    
+    # Find first unassigned position for start depth
+    start_depth = 0
+    while start_depth < n_letters_to_assign and initial_mapping[start_depth] >= 0:
+        start_depth += 1
+    
+    # Calculate total nodes for progress tracking
+    total_nodes = 0
+    remaining_letters = n_letters_to_assign - len(letters_assigned)
+    for depth in range(remaining_letters):
+        if is_full_layout:
+            total_nodes += perm(n_keys_to_assign - len(letters_assigned) - depth, 1)
+        else:
+            total_nodes += comb(n_keys_to_assign - len(letters_assigned) - depth, 1)
+    
+    # Calculate initial score
+    #score_tuple = calculate_layout_score_numba(
     score_tuple = calculate_layout_score_numba(
-        initial_mapping, key_LR, comfort_matrix,
-        bigram_freqs, letter_freqs, bigram_weight, letter_weight
+        initial_mapping,
+        key_LR,
+        comfort_matrix,
+        bigram_freqs,
+        letter_freqs,
+        bigram_weight,
+        letter_weight
     )
     initial_score = score_tuple[0]
-    
+
     # Create HeapItem for initial state
-    heapq.heappush(candidates, HeapItem(-initial_score, 0, initial_mapping, initial_used))
+    heapq.heappush(candidates, HeapItem(-initial_score, start_depth, initial_mapping, initial_used))
     
     processed_nodes = 0
     start_time = time.time()
@@ -696,23 +927,36 @@ def branch_and_bound_optimal(
             used = candidate.used
             
             # Process complete solutions
-            if depth == n_letters:
+            if depth == n_letters_to_assign:
                 score_tuple = calculate_layout_score_numba(
-                    mapping, key_LR, comfort_matrix,
-                    bigram_freqs, letter_freqs, bigram_weight, letter_weight
+                    mapping,
+                    key_LR,
+                    comfort_matrix,
+                    bigram_freqs,
+                    letter_freqs,
+                    bigram_weight,
+                    letter_weight
                 )
                 total_score, bigram_score, letter_score = score_tuple
                 
+                # Convert numpy float32 to Python float
+                total_score_float = float(total_score)
+                bigram_score_float = float(bigram_score)
+                letter_score_float = float(letter_score)
+                
                 if (len(top_n_solutions) < n_solutions or 
-                    total_score > worst_top_n_score):
+                    total_score_float > worst_top_n_score):
+                    # Create solution tuple with Python types, not numpy arrays
                     solution = (
-                        total_score,
-                        bigram_score,
-                        letter_score,
-                        mapping.copy()
+                        total_score_float,
+                        bigram_score_float,
+                        letter_score_float,
+                        mapping.tolist()  # Convert numpy array to list
                     )
                     
-                    heapq.heappush(top_n_solutions, (-total_score, solution))
+                    # Create heap item with Python types
+                    heap_item = (-total_score_float, len(top_n_solutions), solution)  # Add index as tiebreaker
+                    heapq.heappush(top_n_solutions, heap_item)
                     
                     if len(top_n_solutions) > n_solutions:
                         heapq.heappop(top_n_solutions)
@@ -731,32 +975,67 @@ def branch_and_bound_optimal(
                     letter_freqs, bigram_freqs, bigram_weight, letter_weight
                 )
                 if upper_bound <= worst_top_n_score:
-                    remaining_levels = n_letters - depth
+                    remaining_levels = n_letters_to_assign - depth
                     skipped_nodes = sum(
-                        perm(n_positions - d, 1) if is_full_layout else comb(n_positions - d, 1)
+                        perm(n_keys_to_assign - d, 1) if is_full_layout else comb(n_keys_to_assign - d, 1)
                         for d in range(depth, depth + remaining_levels)
                     )
                     pbar.update(skipped_nodes)
                     processed_nodes += skipped_nodes
                     continue
             
-            # Try each available position
+            # Try each available position, respecting constraints
             nodes_at_depth = 0
-            for pos in range(n_positions):
+            current_letter = letters_to_assign[depth]
+            
+            # Skip if letter is already assigned (check initial_mapping)
+            if initial_mapping[depth] >= 0:
+                # Create new state with same mapping but increment depth
+                heapq.heappush(
+                    candidates,
+                    HeapItem(-score, depth + 1, mapping, used)
+                )
+                continue
+                
+            for pos in range(n_keys_to_assign):
                 if not used[pos]:
+                    # Skip if position is already assigned
+                    if pos in initial_mapping[initial_mapping >= 0]:
+                        continue
+                        
+                    # Check constraints
+                    if current_letter in letters_to_constrain:
+                        if keys_to_assign[pos] not in keys_to_constrain:
+                            continue
+                    elif keys_to_assign[pos] in keys_to_constrain:
+                        if current_letter not in letters_to_constrain:
+                            continue
+                                      
+                    # Create new state
                     new_mapping = mapping.copy()
-                    new_mapping[depth] = pos
+                    new_mapping[depth] = pos  
                     new_used = used.copy()
                     new_used[pos] = True
                     
-                    score_tuple = calculate_layout_score_numba(
-                        new_mapping, key_LR, comfort_matrix,
-                        bigram_freqs, letter_freqs, bigram_weight, letter_weight
+                    # Calculate score for new state
+                    score_tuple = calculate_layout_score_numba(  
+                        new_mapping,
+                        key_LR,
+                        comfort_matrix,
+                        bigram_freqs,
+                        letter_freqs,
+                        bigram_weight,
+                        letter_weight
                     )
                     new_score = score_tuple[0]
                     
-                    # Create HeapItem for new state
-                    heapq.heappush(candidates, HeapItem(-new_score, depth + 1, new_mapping, new_used))
+                    # Add to candidates if promising
+                    if len(top_n_solutions) < n_solutions or new_score > worst_top_n_score:
+                        heapq.heappush(
+                            candidates,
+                            HeapItem(-new_score, depth + 1, new_mapping, new_used)
+                        )
+                    
                     nodes_at_depth += 1
             
             pbar.update(nodes_at_depth)
@@ -778,9 +1057,11 @@ def branch_and_bound_optimal(
     # Convert solutions
     solutions = []
     while top_n_solutions:
-        _, solution = heapq.heappop(top_n_solutions)
-        total_score, bigram_score, letter_score, mapping = solution
-        letter_mapping = dict(zip(letters, [keys[i] for i in mapping]))
+        _, _, solution = heapq.heappop(top_n_solutions)
+        total_score, bigram_score, letter_score, mapping_list = solution
+        # Convert back to numpy array if needed
+        mapping = np.array(mapping_list, dtype=np.int32)
+        letter_mapping = dict(zip(letters_to_assign, [keys_to_assign[i] for i in mapping]))
         solutions.append((
             total_score,
             letter_mapping,
@@ -795,57 +1076,66 @@ def branch_and_bound_optimal(
 
 def optimize_layout(config: dict) -> None:
     """
-    Main optimization function with memory estimation and progress tracking.
+    Main optimization function with improved memory estimation and runtime prediction.
     """
-    letters = config['optimization']['letters']
-    positions = config['optimization']['keys']
-    #letters_assigned = config['optimization']['letters_assigned']
-    #keys_assigned = config['optimization']['keys_assigned']
+    # Validate configuration
+    letters_to_assign = config['optimization']['letters_to_assign']
+    keys_to_assign = config['optimization']['keys_to_assign']
+    letters_to_constrain = config['optimization']['letters_to_constrain']
+    keys_to_constrain = config['optimization']['keys_to_constrain']
     letters_assigned = config['optimization'].get('letters_assigned', '')
     keys_assigned = config['optimization'].get('keys_assigned', '')
-    print("\nConfig values:")
-    print(f"letters_assigned: '{letters_assigned}'")
-    print(f"keys_assigned: '{keys_assigned}'")
-
-    # Validate input
-    validate_input(letters, positions)
     
-    is_full_layout = len(letters) == len(positions)
+    validate_optimization_inputs(config)
+
+    is_full_layout = len(letters_to_assign) == len(keys_to_assign)
     
     # Calculate arrangements
     if is_full_layout:
-        total_arrangements = perm(len(positions), len(letters))
+        total_arrangements = perm(len(keys_to_assign), len(letters_to_assign))
     else:
-        positions_choices = comb(len(positions), len(letters))
-        letter_arrangements = factorial(len(letters))
+        positions_choices = comb(len(keys_to_assign), len(letters_to_assign))
+        letter_arrangements = factorial(len(letters_to_assign))
         total_arrangements = positions_choices * letter_arrangements
     
     # Print initial information
-    print(f"Letters to arrange:      {letters.upper()}")
-    print(f"Available positions:     {positions.upper()}")
-    print(f"Layout type:            {'Full (N=M)' if is_full_layout else 'Partial (N<M)'}")
-    print(f"Total arrangements:     {total_arrangements:,}")
+    print(f"Letters to arrange:      {letters_to_assign.upper()}")
+    print(f"Available positions:     {keys_to_assign.upper()}")
+    print(f"Letters to constrain:    {letters_to_constrain.upper()}")
+    print(f"Positions to constrain:  {keys_to_constrain.upper()}")
+    print(f"Layout type:             {'Full (N=M)' if is_full_layout else 'Partial (N<M)'}")
+    print(f"Total arrangements:      {total_arrangements:,}")
     if not is_full_layout:
         print(f"  - Position choices:    {positions_choices:,}")
         print(f"  - Letter arrangements: {letter_arrangements:,}")
     
-    # Calculate memory requirements
-    memory_estimate = estimate_memory_requirements(len(letters), len(positions), max_candidates=1000)
+    # Calculate memory requirements with more accurate estimation
+    memory_estimate = estimate_memory_requirements(len(letters_to_assign), len(keys_to_assign), max_candidates=1000)
     
-    print("\nMemory Requirements:")
-    print(f"Estimated memory usage: {memory_estimate['estimated_gb']:.2f} GB")
-    print(f"Available memory: {memory_estimate['available_memory_gb']:.2f} GB")
-    print(f"Memory sufficient: {memory_estimate['memory_sufficient']}")
+    print("\nMemory and Runtime Estimates:")
+    print(f"Estimated memory usage:  {memory_estimate['estimated_gb']:.2f} GB")
+    print(f"Available memory:        {memory_estimate['available_memory_gb']:.2f} GB")
+    print(f"Memory sufficient:       {memory_estimate['memory_sufficient']}")
+    print(f"Estimated runtime:       {memory_estimate['estimated_runtime']}")
+    print("\nSearch space details:")
+    print(f"Max queue size:          {memory_estimate['details']['max_queue_size']:,}")
+    print(f"Avg branching factor:    {memory_estimate['details']['avg_branching_factor']:.1f}")
+    print(f"Memory per candidate:    {memory_estimate['details']['bytes_per_candidate']:,} bytes")
+    
+    #user_continue = input("\nContinue with optimization? (y/n): ")
+    #if user_continue.lower() != 'y':
+    #    print("Optimization cancelled.")
+    #    return
     
     if not memory_estimate['memory_sufficient']:
         raise MemoryError("Insufficient memory available for optimization")
-    
+        
     # Show initial keyboard
     visualize_keyboard_layout(
         mapping=None,
         title="Keys to optimize",
-        letters_assigned=letters_assigned,
-        keys_assigned=keys_assigned,
+        letters_to_display=letters_assigned,
+        keys_to_display=keys_assigned,
         config=config
     )
         
@@ -866,7 +1156,7 @@ def optimize_layout(config: dict) -> None:
     
     # Prepare arrays and run optimization
     arrays = prepare_arrays(
-        letters, positions, right_keys,
+        letters_to_assign, keys_to_assign, right_keys,
         norm_2key_scores, norm_1key_scores,
         norm_bigram_freqs, norm_letter_freqs
     )
@@ -877,13 +1167,12 @@ def optimize_layout(config: dict) -> None:
     
     # Run optimization
     results = branch_and_bound_optimal(
-        letters=letters,
-        keys=positions,
         arrays=arrays,
         weights=weights,
+        config=config,
         n_solutions=n_layouts
     )
-    
+
     # Sort and save results
     sorted_results = sorted(
         results,
@@ -899,8 +1188,8 @@ def optimize_layout(config: dict) -> None:
         results=sorted_results,
         config=config,
         n=None,
-        letters_assigned=letters_assigned,
-        keys_assigned=keys_assigned
+        letters_to_display=letters_assigned,
+        keys_to_display=keys_assigned
     )
     save_results_to_csv(sorted_results, config)
 

@@ -16,7 +16,7 @@ paths:
 #-----------------------------------------------------------------------
 # Left home block of 12 keys in descending comfort order: FDSVERAWCQXZ
 # Letters in descending frequency: etaoinsrhldcumfpgwybvkxjqz
-# Vowels/consonants: eaoiu / tnsrh ldcmfpgwybvkxj [qz]
+# Vowels/consonants: eaoiu / tnsrhld cmfpgwybvkxj [qz]
 # Most comfortable keys (left/right): FDSVERAW / JKLMIU;O
 # Goal: Optimally arrange the 24 most frequent letters (not q or z)
 #       in the 24 home block keys.
@@ -29,16 +29,22 @@ paths:
 # (3) Optimally arrange the 11 remaining letters (not q or z)
 #     in the 11 remaining home block keys.
 optimization:
-  letters_assigned: "et"
-  keys_assigned: "fj"
-  letters: "aoiu"      # Letters to arrange
-  keys: "fdsver" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
+  letters_assigned: "e"
+  keys_assigned: "F"
+  letters_to_constrain: "ta"
+  keys_to_constrain: "DJK"
+  #letters: "aoiu"      # Letters to arrange
+  #keys: "DSVER" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
+
+  letters_to_assign: "tazq" #"eaoiutnsrhldc"      # Letters to arrange
+  keys_to_assign: "DJKIO" #"FDSVERAJKLMIU" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
+
   #letters: "eaoiutnsrh"      # Letters to arrange
   #keys: "fdsverjklmiu" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
   scoring:  
     bigram_weight: 0.5  # Weight for bigram / 2-key score
     letter_weight: 0.5  # Weight for letter / 1-key score
-  nlayouts: 3           # Number of top layouts to display and save
+  nlayouts: 4           # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Layout Settings
