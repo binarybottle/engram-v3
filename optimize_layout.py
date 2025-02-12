@@ -737,7 +737,7 @@ def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidate
     }
 
 @jit(nopython=True, fastmath=True)
-def calculate_layout_score_numba(
+def calculate_layout_score(
     letter_indices: np.ndarray,
     key_LR: np.ndarray,   
     comfort_matrix: np.ndarray,  
@@ -895,13 +895,20 @@ def calculate_upper_bound(
 ) -> float:
     """Calculate accurate upper bound on best possible score from this node."""
     # Get current score from assigned letters
-    current_score = calculate_layout_score_numba(
+    current_score = calculate_layout_score(
         mapping, key_LR, comfort_matrix,
         bigram_freqs, letter_freqs, bigram_weight, letter_weight
     )[0]
     
+    # All possible directed pairs:
+    #   - Pairs between already assigned letters (already accounted for in current_score)
+    #   - Pairs between assigned and unassigned letters
+    #   - Pairs between unassigned letters
+    n_total = len(mapping)  # Total number of letters
+    n_pairs = n_total * (n_total - 1)  
+
     # For remaining letters, use best possible scores
-    n_remaining = len(mapping) - depth
+    n_remaining = n_total - depth
     if n_remaining == 0:
         return current_score
         
@@ -921,10 +928,9 @@ def calculate_upper_bound(
     max_letter_score = np.sum(comfort_scores * remaining_freqs) * letter_weight
     
     # Maximum possible bigram score contribution
-    # In calculate_layout_score_numba:
+    # In calculate_layout_score:
     #   bigram_component += (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
     #   weighted_bigram = bigram_component * bigram_weight / 2.0
-    n_pairs = n_remaining * (n_remaining - 1)  # All directed pairs
     max_comfort = np.max(comfort_matrix)
     max_bigram_freq = np.max(bigram_freqs)
     max_bigram_score = n_pairs * max_comfort * max_bigram_freq * bigram_weight / 2.0
@@ -1020,7 +1026,7 @@ def branch_and_bound_optimal(
                 print(f"Pre-assigned: {letter} -> {key} (position {pos})")
     
     # Calculate initial score
-    score_tuple = calculate_layout_score_numba(
+    score_tuple = calculate_layout_score(
         initial_mapping,
         key_LR,
         comfort_matrix,
@@ -1085,7 +1091,7 @@ def branch_and_bound_optimal(
                 if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
                     continue  # Skip invalid solutions
                     
-                score_tuple = calculate_layout_score_numba(
+                score_tuple = calculate_layout_score(
                     mapping,
                     key_LR,
                     comfort_matrix,
@@ -1169,7 +1175,7 @@ def branch_and_bound_optimal(
                     continue
                     
                 # Calculate score
-                score_tuple = calculate_layout_score_numba(
+                score_tuple = calculate_layout_score(
                     new_mapping,
                     key_LR,
                     comfort_matrix,
