@@ -999,9 +999,10 @@ def branch_and_bound_optimal(
     constrained_letter_indices = set(i for i, letter in enumerate(letters_to_assign) 
                                    if letter in constrained_letters)
     
-    print("\nConstraint tracking:")
-    print(f"Constrained letters at indices: {sorted(constrained_letter_indices)}")
-    print(f"Constrained positions: {sorted(constrained_positions)}")
+    # DEBUG
+    #print("\nConstraint tracking:")
+    #print(f"Constrained letters at indices: {sorted(constrained_letter_indices)}")
+    #print(f"Constrained positions: {sorted(constrained_positions)}")
     
     # Set up checkpointing
     checkpoint_dir = "checkpoints"
