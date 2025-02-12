@@ -18,16 +18,23 @@ paths:
 # Letters in descending frequency: etaoinsrhldcumfpgwybvkxjqz
 # Vowels/consonants: eaoiu / tnsrh ldcmfpgwybvkxj [qz]
 # Most comfortable keys (left/right): FDSVERAW / JKLMIU;O
-# (0) Goal: Optimally arrange the 24 most frequent letters (not q or z)
-#     in the 24 home block keys.
-# (1) Arrange 5 vowels on the left side of the keyboard.
+# Goal: Optimally arrange the 24 most frequent letters (not q or z)
+#       in the 24 home block keys.
+# (1) Assign E and T (most common letters) to the most comfortable keys.
+# (2) Arrange 5 vowels in the 6 most comfortable keys on the left side of the keyboard
+#      .
+
 # (2) Arrange 8 consonants (with > median frequency "u") 
 #     within the remaining keys of the 16 most comfortable keys.
 # (3) Optimally arrange the 11 remaining letters (not q or z)
 #     in the 11 remaining home block keys.
 optimization:
-  letters: "eaoiu"      # Letters to arrange
-  keys: "qwerasdfzxcv" #"fdsverajklmiu" # Qwerty keys to position letters
+  letters_assigned: "et"
+  keys_assigned: "fj"
+  letters: "aoiu"      # Letters to arrange
+  keys: "fdsver" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
+  #letters: "eaoiutnsrh"      # Letters to arrange
+  #keys: "fdsverjklmiu" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
   scoring:  
     bigram_weight: 0.5  # Weight for bigram / 2-key score
     letter_weight: 0.5  # Weight for letter / 1-key score
@@ -72,6 +79,16 @@ layout:
 #-----------------------------------------------------------------------
 visualization:
   keyboard_template: |
+    ╭───────────────────────────────────────────────╮
+    │ Layout: {title:<34}    │
+    ├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┤
+    │ {q:^3} │ {w:^3} │ {e:^3} │ {r:^3} ║ {u:^3} │ {i:^3} │ {o:^3} │ {p:^3} │
+    ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+    │ {a:^3} │ {s:^3} │ {d:^3} │ {f:^3} ║ {j:^3} │ {k:^3} │ {l:^3} │ {sc:^3} │
+    ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+    │ {z:^3} │ {x:^3} │ {c:^3} │ {v:^3} ║ {m:^3} │ {cm:^3} │ {dt:^3} │ {sl:^3} │
+    ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
+  keyboard_qwerty_template: |
     ╭───────────────────────────────────────────────╮
     │ Layout: {title:<34}    │
     ├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┤
