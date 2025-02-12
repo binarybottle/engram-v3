@@ -392,28 +392,21 @@ def setup_checkpointing(config: dict, search_space: dict) -> dict:
         'last_save': time.time()
     }
 
+def validate_mapping(mapping: np.ndarray, constrained_letter_indices: set, constrained_positions: set) -> bool:
+    """Validate that mapping follows all constraints."""
+    for idx in constrained_letter_indices:
+        if mapping[idx] >= 0 and mapping[idx] not in constrained_positions:
+            return False
+    return True
+
 def save_checkpoint(
     checkpoint_path: str,
-    current_solutions: list,
-    processed_nodes: int,
-    depth_stats: dict,
-    constraint_stats: dict,
-    start_time: float
+    current_state: dict
 ) -> None:
     """Save current search state to checkpoint file."""
-    checkpoint = {
-        'timestamp': time.time(),
-        'solutions': current_solutions,
-        'processed_nodes': processed_nodes,
-        'depth_stats': depth_stats,
-        'constraint_stats': constraint_stats,
-        'elapsed_time': time.time() - start_time
-    }
-    
-    # Use temporary file to ensure atomic write
     temp_path = f"{checkpoint_path}.tmp"
     with open(temp_path, 'wb') as f:
-        pickle.dump(checkpoint, f)
+        pickle.dump(current_state, f)
     os.replace(temp_path, checkpoint_path)
 
 def load_checkpoint(checkpoint_path: str) -> dict:
@@ -793,27 +786,6 @@ def calculate_layout_score_numba(
     
     return float(total_score), float(weighted_bigram), float(weighted_letter)
 
-def calculate_total_arrangements(
-    n_letters: int,
-    n_positions: int,
-    letters_to_constrain: set,
-    keys_to_constrain: set,
-) -> int:
-    """Calculate actual number of possible arrangements."""
-    # First arrange constrained letters in constrained positions
-    constrained_arrangements = perm(len(keys_to_constrain), len(letters_to_constrain))
-    
-    # Then arrange remaining letters in remaining positions
-    remaining_letters = n_letters - len(letters_to_constrain)
-    remaining_positions = n_positions - len(letters_to_constrain)
-    unconstrained_arrangements = perm(remaining_positions, remaining_letters)
-    
-    # Multiply by permutations of letters within each group
-    total = (constrained_arrangements * factorial(len(letters_to_constrain)) * 
-             unconstrained_arrangements * factorial(remaining_letters))
-    
-    return total
-
 def exact_remaining_arrangements(
     constrained_letters: set,
     constrained_positions: set,
@@ -899,7 +871,7 @@ def calculate_total_nodes(
         'total_nodes': total_nodes,
         'constrained_arrangements': factorial(n_constrained) * perm(n_constrained_positions, n_constrained),
         'unconstrained_arrangements': factorial(remaining_letters - n_constrained) * 
-                                    perm(remaining_positions, remaining_letters - n_constrained),
+                                      perm(remaining_positions, remaining_letters - n_constrained),
         'depth_distributions': depth_distributions,
         'details': {
             'available_positions': available_positions,
@@ -913,37 +885,51 @@ def calculate_total_nodes(
 def calculate_upper_bound(
     mapping: np.ndarray,
     depth: int,
+    used: np.ndarray,
     key_LR: np.ndarray,
     comfort_matrix: np.ndarray,
     letter_freqs: np.ndarray,
     bigram_freqs: np.ndarray,
     bigram_weight: float,
-    letter_weight: float,
-    constrained_depth: int  # Add this parameter
+    letter_weight: float
 ) -> float:
-    """Calculate upper bound considering phases."""
-    # Get current score
+    """Calculate accurate upper bound on best possible score from this node."""
+    # Get current score from assigned letters
     current_score = calculate_layout_score_numba(
         mapping, key_LR, comfort_matrix,
         bigram_freqs, letter_freqs, bigram_weight, letter_weight
     )[0]
     
-    if depth < constrained_depth:
-        # In constrained phase, only consider remaining constrained positions
-        max_remaining = calculate_max_remaining_constrained(
-            mapping, depth, constrained_depth,
-            comfort_matrix, letter_freqs, bigram_freqs,
-            bigram_weight, letter_weight
-        )
-    else:
-        # In unconstrained phase, consider all remaining positions
-        max_remaining = calculate_max_remaining_unconstrained(
-            mapping, depth,
-            comfort_matrix, letter_freqs, bigram_freqs,
-            bigram_weight, letter_weight
-        )
+    # For remaining letters, use best possible scores
+    n_remaining = len(mapping) - depth
+    if n_remaining == 0:
+        return current_score
+        
+    # Get unassigned letters and available positions
+    unassigned = np.where(mapping < 0)[0]
+    available_positions = np.where(~used)[0]
     
-    return current_score + max_remaining
+    # Get comfort scores only for available positions
+    remaining_comfort_scores = comfort_matrix[available_positions][:,available_positions].flatten()
+    comfort_scores = np.sort(remaining_comfort_scores)[-n_remaining:][::-1]  # highest to lowest
+    
+    # Get frequencies for unassigned letters
+    remaining_freqs = letter_freqs[unassigned]
+    remaining_freqs = np.sort(remaining_freqs)[::-1]  # highest to lowest
+    
+    # Maximum possible letter score contribution
+    max_letter_score = np.sum(comfort_scores * remaining_freqs) * letter_weight
+    
+    # Maximum possible bigram score contribution
+    # In calculate_layout_score_numba:
+    #   bigram_component += (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
+    #   weighted_bigram = bigram_component * bigram_weight / 2.0
+    n_pairs = n_remaining * (n_remaining - 1)  # All directed pairs
+    max_comfort = np.max(comfort_matrix)
+    max_bigram_freq = np.max(bigram_freqs)
+    max_bigram_score = n_pairs * max_comfort * max_bigram_freq * bigram_weight / 2.0
+    
+    return float(current_score + max_letter_score + max_bigram_score)
 
 class HeapItem:
     """Helper class to make heap operations work with numpy arrays."""
@@ -964,7 +950,8 @@ def branch_and_bound_optimal(
     memory_threshold_gb: float = 0.9
 ) -> List[Tuple[float, Dict[str, str], Dict]]:
     """
-    Branch and bound implementation with phased search for constrained letters.
+    Branch and bound implementation with phased search for constrained letters,
+    improved progress monitoring, and checkpoint saving.
     """
     # Get letters and keys from config
     letters_to_assign = config['optimization']['letters_to_assign']
@@ -985,22 +972,31 @@ def branch_and_bound_optimal(
     # Initialize dimensions and arrays
     n_letters_to_assign = len(letters_to_assign)
     n_keys_to_assign = len(keys_to_assign)
-    is_full_layout = n_letters_to_assign == n_keys_to_assign
     
     key_LR, comfort_matrix, letter_freqs, bigram_freqs = arrays
     bigram_weight, letter_weight = weights
     
-    # Separate constrained and unconstrained letters
-    constrained_indices = [i for i, letter in enumerate(letters_to_assign) if letter in letters_to_constrain]
-    unconstrained_indices = [i for i, letter in enumerate(letters_to_assign) if letter not in letters_to_constrain]
+    # Set up constraint tracking
+    constrained_letters = set(letters_to_constrain.lower())
+    constrained_positions = set(i for i, key in enumerate(keys_to_assign) 
+                              if key.upper() in keys_to_constrain.upper())
+    constrained_letter_indices = set(i for i, letter in enumerate(letters_to_assign) 
+                                   if letter in constrained_letters)
     
-    # Convert constrained positions to indices
-    constrained_positions = [i for i, key in enumerate(keys_to_assign) if key in keys_to_constrain]
+    print("\nConstraint tracking:")
+    print(f"Constrained letters at indices: {sorted(constrained_letter_indices)}")
+    print(f"Constrained positions: {sorted(constrained_positions)}")
     
-    print("\nSearch configuration:")
-    print(f"Phase 1: Arrange {len(constrained_indices)} constrained letters in {len(constrained_positions)} positions")
-    print(f"Phase 2: Arrange {len(unconstrained_indices)} letters in remaining positions")
-    
+    # Set up checkpointing
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoint_path = os.path.join(
+        checkpoint_dir,
+        f"search_L{n_letters_to_assign}_K{n_keys_to_assign}_C{len(constrained_letters)}_{timestamp}.checkpoint"
+    )
+    checkpoint_interval = 1000000  # Save every million nodes
+
     # Initialize search structures
     candidates = []
     top_n_solutions = []
@@ -1035,24 +1031,46 @@ def branch_and_bound_optimal(
     )
     initial_score = score_tuple[0]
     
+    # Initialize tracking variables
+    processed_nodes = 0
+    start_time = time.time()
+    last_update_time = start_time
+    last_checkpoint_time = start_time
+    update_interval = 5  # seconds
+    
+    # Calculate phase nodes
+    total_nodes_first_phase = perm(len(constrained_positions), len(constrained_letters))
+    remaining_positions = n_keys_to_assign - len(constrained_letters)
+    remaining_letters = n_letters_to_assign - len(constrained_letters) 
+
+    # For second phase, need to account for positions still available
+    available_unconstrained_positions = remaining_positions - (len(constrained_positions) - len(constrained_letters))
+    total_nodes_second_phase = perm(available_unconstrained_positions, remaining_letters)
+
+    print(f"\nPhase 1 (Constrained letters): {total_nodes_first_phase:,} nodes")
+    print(f"Phase 2 (Remaining letters): {total_nodes_second_phase:,} nodes")
+    
     # Start search
     heapq.heappush(candidates, HeapItem(-initial_score, 0, initial_mapping, initial_used))
     
-    processed_nodes = 0
-    start_time = time.time()
-    n_depths = n_letters_to_assign + 1
-    depth_stats = {depth: {'visited': 0, 'pruned': 0} for depth in range(n_depths)}
-    constraint_stats = {'satisfied': 0, 'violated': 0}
-    
-    def is_constrained_phase(depth: int) -> bool:
-        return depth < len(constrained_indices)
-    
-    print("\nStarting search...")
-    with tqdm(total=n_letters_to_assign, desc="Optimizing layout") as pbar:
+    with tqdm(total=total_nodes_first_phase + total_nodes_second_phase, 
+              desc="Optimizing layout",
+              unit='nodes') as pbar:
+        current_phase = 1
+        phase_start_time = time.time()
+
         while candidates:
             # Memory check
             if psutil.virtual_memory().percent > memory_threshold_gb * 100:
-                print("\nWarning: Memory usage high, saving current best solutions")
+                print("\nWarning: Memory usage high, saving checkpoint and stopping")
+                save_checkpoint(checkpoint_path, {
+                    'candidates': candidates,
+                    'top_n_solutions': top_n_solutions,
+                    'processed_nodes': processed_nodes,
+                    'current_phase': current_phase,
+                    'phase_start_time': phase_start_time,
+                    'start_time': start_time
+                })
                 break
             
             # Get next candidate
@@ -1064,6 +1082,9 @@ def branch_and_bound_optimal(
             
             # Process complete solutions
             if depth == n_letters_to_assign:
+                if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
+                    continue  # Skip invalid solutions
+                    
                 score_tuple = calculate_layout_score_numba(
                     mapping,
                     key_LR,
@@ -1074,7 +1095,7 @@ def branch_and_bound_optimal(
                     letter_weight
                 )
                 total_score, bigram_score, letter_score = score_tuple
-                
+
                 if (len(top_n_solutions) < n_solutions or 
                     total_score > worst_top_n_score):
                     solution = (
@@ -1094,80 +1115,126 @@ def branch_and_bound_optimal(
                         print(f"\nNew solution found (score: {total_score:.4f})")
                         print(f"Current best score: {-top_n_solutions[0][0]:.4f}")
                 
-                depth_stats[depth]['visited'] += 1
-                pbar.update(1)
                 processed_nodes += 1
+                pbar.update(1)
                 continue
             
             # Only prune if we have enough solutions and can prove this branch won't yield better ones
             if len(top_n_solutions) >= n_solutions:
                 upper_bound = calculate_upper_bound(
-                    mapping, depth, key_LR, comfort_matrix,
+                    mapping, depth, used, key_LR, comfort_matrix,
                     letter_freqs, bigram_freqs, bigram_weight, letter_weight
                 )
                 
-                if upper_bound < worst_top_n_score:
-                    depth_stats[depth]['pruned'] += 1
+                margin = 1e-8 * abs(worst_top_n_score)  # Relative margin for precision error
+
+                if upper_bound < worst_top_n_score - margin:
                     processed_nodes += 1
-                    pbar.update(0)  # Update without incrementing
+                    pbar.update(1)
                     continue
             
             # Try each available position
             nodes_at_depth = 0
             current_letter = letters_to_assign[depth]
+            is_constrained_letter = current_letter in constrained_letters
+
+            # Get valid positions for current letter
+            valid_positions = []
+            if is_constrained_letter:
+                # Constrained letter can only go in constrained positions
+                valid_positions = [pos for pos in constrained_positions if not used[pos]]
+            else:
+                # Count remaining constrained letters and positions
+                remaining_constrained_letters = sum(1 for i in constrained_letter_indices if mapping[i] < 0)
+                remaining_constrained_positions = [pos for pos in constrained_positions if not used[pos]]
+                
+                if remaining_constrained_letters > len(remaining_constrained_positions):
+                    # Not enough constrained positions left, this branch is invalid
+                    continue
+                
+                # Can use any position except those needed for remaining constrained letters
+                positions_needed_for_constrained = set(remaining_constrained_positions[:remaining_constrained_letters])
+                valid_positions = [pos for pos in range(n_keys_to_assign) 
+                                   if not used[pos] and pos not in positions_needed_for_constrained]
             
-            # Skip if letter is already assigned
-            if initial_mapping[depth] >= 0:
-                heapq.heappush(
-                    candidates,
-                    HeapItem(-score, depth + 1, mapping, used)
+            for pos in valid_positions:
+                # Create new state
+                new_mapping = mapping.copy()
+                new_mapping[depth] = pos
+                new_used = used.copy()
+                new_used[pos] = True
+                
+                # Validate partial solution
+                if not validate_mapping(new_mapping, constrained_letter_indices, constrained_positions):
+                    continue
+                    
+                # Calculate score
+                score_tuple = calculate_layout_score_numba(
+                    new_mapping,
+                    key_LR,
+                    comfort_matrix,
+                    bigram_freqs,
+                    letter_freqs,
+                    bigram_weight,
+                    letter_weight
                 )
-                continue
-            
-            for pos in range(n_keys_to_assign):
-                if not used[pos]:
-                    # Handle phases
-                    if is_constrained_phase(depth):
-                        # In constrained phase, only use constrained positions
-                        if pos not in constrained_positions:
-                            continue
-                    else:
-                        # In unconstrained phase, skip constrained positions if not used by constrained letters
-                        if pos in constrained_positions and pos not in mapping:
-                            continue
-                    
-                    # Create new state
-                    new_mapping = mapping.copy()
-                    new_mapping[depth] = pos
-                    new_used = used.copy()
-                    new_used[pos] = True
-                    
-                    # Calculate score
-                    score_tuple = calculate_layout_score_numba(
-                        new_mapping,
-                        key_LR,
-                        comfort_matrix,
-                        bigram_freqs,
-                        letter_freqs,
-                        bigram_weight,
-                        letter_weight
+                new_score = score_tuple[0]
+                
+                # Add to candidates if promising
+                if len(top_n_solutions) < n_solutions or new_score > worst_top_n_score:
+                    heapq.heappush(
+                        candidates,
+                        HeapItem(-new_score, depth + 1, new_mapping, new_used)
                     )
-                    new_score = score_tuple[0]
-                    
-                    # Add to candidates if promising
-                    if len(top_n_solutions) < n_solutions or new_score > worst_top_n_score:
-                        heapq.heappush(
-                            candidates,
-                            HeapItem(-new_score, depth + 1, new_mapping, new_used)
-                        )
-                        depth_stats[depth]['visited'] += 1
-                    else:
-                        depth_stats[depth]['pruned'] += 1
-                    
-                    nodes_at_depth += 1
+                
+                nodes_at_depth += 1
             
-            pbar.update(0)  # Update progress bar
             processed_nodes += nodes_at_depth
+            pbar.update(nodes_at_depth)
+            
+            # Update progress and save checkpoint if needed
+            current_time = time.time()
+            if current_time - last_update_time >= update_interval:
+                elapsed = current_time - phase_start_time
+                if elapsed > 0:
+                    nodes_per_second = processed_nodes / elapsed
+                    
+                    # Detect phase change
+                    if current_phase == 1 and all(mapping[i] >= 0 for i in constrained_letter_indices):
+                        print("\nPhase 1 complete!")
+                        print(f"Time taken: {str(timedelta(seconds=int(elapsed)))}")
+                        current_phase = 2
+                        phase_start_time = current_time
+                        processed_nodes = 0
+                    
+                    # Calculate remaining time for current phase
+                    if current_phase == 1:
+                        remaining_nodes = total_nodes_first_phase - processed_nodes
+                    else:
+                        remaining_nodes = total_nodes_second_phase - processed_nodes
+                    
+                    eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else float('inf')
+                    
+                    pbar.set_postfix({
+                        'Phase': f"{current_phase}/2",
+                        'Nodes/sec': f"{nodes_per_second:.0f}",
+                        'ETA': str(timedelta(seconds=int(eta_seconds))),
+                        'Memory': f"{psutil.Process().memory_info().rss / 1024**3:.1f}GB"
+                    })
+                
+                last_update_time = current_time
+            
+            # Save checkpoint if needed
+            if processed_nodes - last_checkpoint_time >= checkpoint_interval:
+                save_checkpoint(checkpoint_path, {
+                    'candidates': candidates,
+                    'top_n_solutions': top_n_solutions,
+                    'processed_nodes': processed_nodes,
+                    'current_phase': current_phase,
+                    'phase_start_time': phase_start_time,
+                    'start_time': start_time
+                })
+                last_checkpoint_time = processed_nodes
     
     # Convert solutions
     solutions = []
@@ -1297,7 +1364,7 @@ def optimize_layout(config: dict) -> None:
         keys_to_display=keys_assigned
     )
     save_results_to_csv(sorted_results, config)
-    
+
 #--------------------------------------------------------------------
 # Pipeline
 #--------------------------------------------------------------------

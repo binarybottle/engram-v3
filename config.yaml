@@ -30,14 +30,14 @@ paths:
 #     in the 11 remaining home block keys.
 optimization:
 
-  letters_assigned: "z"          # Letters already assigned to keys_assigned
-  keys_assigned:    "P"          # Keys assigned letters_assigned
+  letters_assigned: ""          # Letters already assigned to keys_assigned
+  keys_assigned:    ""          # Keys assigned letters_assigned
 
   letters_to_constrain: "et"  # Subset of letters_to_assign to arrange within keys_to_constrain
   keys_to_constrain: "FDJK"   # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
 
   letters_to_assign: "etaoiunsrhldc"  # 13 Letters to arrange
-  keys_to_assign: "FDSVERAJKLMIU;"    # 14 Keys to arrange letters_to_assign
+  keys_to_assign: "FDSVERAJKLMIU"     # 13 Keys to arrange letters_to_assign
   scoring:  
     bigram_weight: 0.5  # Weight for bigram / 2-key score
     letter_weight: 0.5  # Weight for letter / 1-key score
