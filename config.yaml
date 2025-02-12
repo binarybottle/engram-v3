@@ -29,22 +29,19 @@ paths:
 # (3) Optimally arrange the 11 remaining letters (not q or z)
 #     in the 11 remaining home block keys.
 optimization:
-  letters_assigned: "e"
-  keys_assigned: "F"
-  letters_to_constrain: "ta"
-  keys_to_constrain: "DJK"
-  #letters: "aoiu"      # Letters to arrange
-  #keys: "DSVER" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
 
-  letters_to_assign: "tazq" #"eaoiutnsrhldc"      # Letters to arrange
-  keys_to_assign: "DJKIO" #"FDSVERAJKLMIU" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
+  letters_assigned: "z"          # Letters already assigned to keys_assigned
+  keys_assigned:    "P"          # Keys assigned letters_assigned
 
-  #letters: "eaoiutnsrh"      # Letters to arrange
-  #keys: "fdsverjklmiu" #"FDSVERJKLMIU" #"fdsverajklmiu" # Qwerty keys to position letters
+  letters_to_constrain: "et"  # Subset of letters_to_assign to arrange within keys_to_constrain
+  keys_to_constrain: "FDJK"   # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
+
+  letters_to_assign: "etaoiunsrhldc"  # 13 Letters to arrange
+  keys_to_assign: "FDSVERAJKLMIU;"    # 14 Keys to arrange letters_to_assign
   scoring:  
     bigram_weight: 0.5  # Weight for bigram / 2-key score
     letter_weight: 0.5  # Weight for letter / 1-key score
-  nlayouts: 4           # Number of top layouts to display and save
+  nlayouts: 10          # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Layout Settings

@@ -2,6 +2,7 @@
 
 input/*
 output/*
+checkpoints/*
 
 __pycache__
 package-lock.json

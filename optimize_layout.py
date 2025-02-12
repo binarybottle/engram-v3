@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from numba import prange, jit, float64, boolean
 import heapq
 import csv
+import pickle
 
 from input.bigram_frequencies_english import (
     bigrams, bigram_frequencies_array,
@@ -170,55 +171,37 @@ def load_and_normalize_frequencies(onegrams: str,
     return norm_letter_freqs, norm_bigram_freqs
 
 def validate_optimization_inputs(config):
+    """
+    Validate optimization inputs from config, safely handling None values.
+    """
+    # Safely get and convert values
+    letters_to_assign = config['optimization'].get('letters_to_assign', '')
+    letters_to_assign = set(letters_to_assign.lower() if letters_to_assign else '')
 
-    # Get letters/keys from config
-    letters_to_assign = set(config['optimization']['letters_to_assign'].lower())
-    keys_to_assign = set(config['optimization']['keys_to_assign'].lower())
-    letters_to_constrain = set(config['optimization'].get('letters_to_constrain', '').lower())
-    keys_to_constrain = set(config['optimization'].get('keys_to_constrain', '').lower())
-    letters_assigned = set(config['optimization'].get('letters_assigned', '').lower())
-    keys_assigned = set(config['optimization'].get('keys_assigned', '').lower())
+    keys_to_assign = config['optimization'].get('keys_to_assign', '')
+    keys_to_assign = set(keys_to_assign.upper() if keys_to_assign else '')
 
-    # Check for duplicates in letters
-    if len(set(letters_to_assign)) != len(letters_to_assign):
-        raise ValueError(f"Duplicate letters: {letters_to_assign}")
-    
-    # Check for duplicates in keys
-    if len(set(keys_to_assign)) != len(keys_to_assign):
-        raise ValueError(f"Duplicate keys: {keys_to_assign}")
-    
-    # Check that we have enough positions
-    if len(letters_to_assign) > len(keys_to_assign):
-        raise ValueError(f"More letters ({len(letters_to_assign)}) than available positions ({len(keys_to_assign)})")
+    letters_to_constrain = config['optimization'].get('letters_to_constrain', '')
+    letters_to_constrain = set(letters_to_constrain.lower() if letters_to_constrain else '')
 
-    # Validate no overlap between assigned and to_assign/to_constrain
-    if not letters_assigned.isdisjoint(letters_to_assign):
-        raise ValueError("letters_to_assign/constrain contains letters that are already assigned")
-    if not keys_assigned.isdisjoint(keys_to_assign):
-        raise ValueError("keys_to_assign/constrain contains keys that are already assigned")
-        
-    # Check if letters_to_constrain is subset of letters
-    if not letters_to_constrain.issubset(letters_to_assign):
-        invalid_letters = letters_to_constrain - letters_to_assign
-        raise ValueError(f"letters_to_constrain contains letters not in main letters set: {invalid_letters}")
+    keys_to_constrain = config['optimization'].get('keys_to_constrain', '')
+    keys_to_constrain = set(keys_to_constrain.upper() if keys_to_constrain else '')
 
-    # Check if keys_to_constrain is subset of keys
-    if not keys_to_constrain.issubset(keys_to_assign):
-        invalid_keys = keys_to_constrain - keys_to_assign
-        raise ValueError(f"keys_to_constrain contains keys not in main keys set: {invalid_keys}")
-    
-    # Check if we have enough constraint keys for constraint letters
-    if len(letters_to_constrain) > len(keys_to_constrain):
-        raise ValueError(
-            f"Not enough constraint keys ({len(keys_to_constrain)}) "
-            f"for constraint letters ({len(letters_to_constrain)})"
-        )
+    letters_assigned = config['optimization'].get('letters_assigned', '')
+    letters_assigned = set(letters_assigned.lower() if letters_assigned else '')
 
-    # Check for duplicates in assigned letters/keys
-    if len(set(letters_assigned)) != len(letters_assigned):
-        raise ValueError(f"Duplicate assigned letters: {letters_assigned}")
-    if len(set(keys_assigned)) != len(keys_assigned):
-        raise ValueError(f"Duplicate assigned keys: {keys_assigned}")
+    keys_assigned = config['optimization'].get('keys_assigned', '')
+    keys_assigned = set(keys_assigned.upper() if keys_assigned else '')
+
+    # Check for duplicates
+    if len(letters_to_assign) != len(config['optimization']['letters_to_assign']):
+        raise ValueError(f"Duplicate letters in letters_to_assign: {config['optimization']['letters_to_assign']}")
+    if len(keys_to_assign) != len(config['optimization']['keys_to_assign']):
+        raise ValueError(f"Duplicate keys in keys_to_assign: {config['optimization']['keys_to_assign']}")
+    if len(letters_assigned) != len(config['optimization']['letters_assigned']):
+        raise ValueError(f"Duplicate letters in letters_assigned: {config['optimization']['letters_assigned']}")
+    if len(keys_assigned) != len(config['optimization']['keys_assigned']):
+        raise ValueError(f"Duplicate keys in keys_assigned: {config['optimization']['keys_assigned']}")
     
     # Check that assigned letters and keys have matching lengths
     if len(letters_assigned) != len(keys_assigned):
@@ -227,20 +210,36 @@ def validate_optimization_inputs(config):
             f"and assigned keys ({len(keys_assigned)})"
         )
 
-    # Check no overlap between assigned and constrained
-    if not letters_assigned.isdisjoint(letters_to_constrain):
-        overlap = letters_assigned.intersection(letters_to_constrain)
-        raise ValueError(f"letters_to_constrain contains assigned letters: {overlap}")
-    if not keys_assigned.isdisjoint(keys_to_constrain):
-        overlap = keys_assigned.intersection(keys_to_constrain)
-        raise ValueError(f"keys_to_constrain contains assigned keys: {overlap}")
+    # Check no overlap between assigned and to_assign
+    overlap = letters_assigned.intersection(letters_to_assign)
+    if overlap:
+        raise ValueError(f"letters_to_assign contains assigned letters: {overlap}")
+    overlap = keys_assigned.intersection(keys_to_assign)
+    if overlap:
+        raise ValueError(f"keys_to_assign contains assigned keys: {overlap}")
 
-    # Check for duplicates in constrained letters/keys
-    if len(set(letters_to_constrain)) != len(letters_to_constrain):
-        raise ValueError(f"Duplicate constrained letters: {letters_to_constrain}")
-    if len(set(keys_to_constrain)) != len(keys_to_constrain):
-        raise ValueError(f"Duplicate constrained keys: {keys_to_constrain}")
- 
+    # Check that we have enough positions
+    if len(letters_to_assign) > len(keys_to_assign):
+        raise ValueError(
+            f"More letters to assign ({len(letters_to_assign)}) "
+            f"than available positions ({len(keys_to_assign)})"
+        )
+
+    # Check constraints are subsets
+    if not letters_to_constrain.issubset(letters_to_assign):
+        invalid = letters_to_constrain - letters_to_assign
+        raise ValueError(f"letters_to_constrain contains letters not in letters_to_assign: {invalid}")
+    if not keys_to_constrain.issubset(keys_to_assign):
+        invalid = keys_to_constrain - keys_to_assign
+        raise ValueError(f"keys_to_constrain contains keys not in keys_to_assign: {invalid}")
+
+    # Check if we have enough constraint keys for constraint letters
+    if len(letters_to_constrain) > len(keys_to_constrain):
+        raise ValueError(
+            f"Not enough constraint keys ({len(keys_to_constrain)}) "
+            f"for constraint letters ({len(letters_to_constrain)})"
+        )
+    
 def prepare_arrays(
     letters_to_assign: str,
     keys_to_assign: str,
@@ -253,34 +252,39 @@ def prepare_arrays(
     """
     Prepare input arrays for the scoring function.
     """
+    #print("\nPreparing arrays:")
+    #print(f"Letters to assign: {letters_to_assign}")
+    #print(f"Keys to assign: {keys_to_assign}")
+    #print(f"Right keys: {right_keys}")
+    
     n_letters_to_assign = len(letters_to_assign)
     n_keys_to_assign = len(keys_to_assign)
     
-    # Create key position array (1 for right side, 0 for left side)
     key_LR = np.array([1 if k in right_keys else 0 for k in keys_to_assign], dtype=np.int8)
+    #print(f"key_LR: {key_LR}")
     
-    # Create comfort score matrix for all possible positions
+    # Create comfort score matrix
     comfort_matrix = np.zeros((n_keys_to_assign, n_keys_to_assign), dtype=np.float32)
     for i, k1 in enumerate(keys_to_assign):
         for j, k2 in enumerate(keys_to_assign):
-            if i == j:  # Single key comfort
+            if i == j:
                 comfort_matrix[i, j] = norm_1key_scores.get(k1.lower(), 0.0)
-            else:  # Two key comfort
+            else:
                 comfort_matrix[i, j] = norm_2key_scores.get((k1.lower(), k2.lower()), 0.0)
-    
-    print("Comfort matrix:")
-    print(comfort_matrix)
+    #print(f"Comfort matrix shape: {comfort_matrix.shape}")
     
     # Create letter frequency array
     letter_freqs = np.array([
         norm_letter_freqs.get(l.lower(), 0.0) for l in letters_to_assign
     ], dtype=np.float32)
+    #print(f"Letter frequencies: {letter_freqs}")
     
     # Create bigram frequency matrix
     bigram_freqs = np.zeros((n_letters_to_assign, n_letters_to_assign), dtype=np.float32)
     for i, l1 in enumerate(letters_to_assign):
         for j, l2 in enumerate(letters_to_assign):
             bigram_freqs[i, j] = norm_bigram_freqs.get((l1.lower(), l2.lower()), 0.0)
+    #print(f"Bigram frequencies shape: {bigram_freqs.shape}")
     
     return key_LR, comfort_matrix, letter_freqs, bigram_freqs
 
@@ -323,6 +327,101 @@ def prepare_assigned_indices(letters: str, letters_assigned: str, keys: str, key
                 assigned_indices[idx] = pos
                 
     return assigned_indices
+
+def setup_checkpointing(config: dict, search_space: dict) -> dict:
+    """
+    Configure checkpointing based on search space size and estimated runtime.
+    
+    Returns:
+        dict with checkpoint settings:
+        - enabled: bool, whether checkpointing is enabled
+        - interval: int, nodes between checkpoints
+        - path: str, checkpoint file path
+        - metadata: dict, search configuration data
+    """
+    # Estimate if checkpointing is needed based on search space size
+    LONG_SEARCH_THRESHOLD = 1e9  # 1 billion nodes
+    VERY_LONG_SEARCH_THRESHOLD = 1e12  # 1 trillion nodes
+    
+    total_nodes = search_space['total_nodes']
+    estimated_nodes_per_second = 100000  # Conservative estimate
+    estimated_runtime = total_nodes / estimated_nodes_per_second
+    
+    # Determine if we need checkpointing
+    checkpointing_enabled = total_nodes > LONG_SEARCH_THRESHOLD
+    
+    if not checkpointing_enabled:
+        return {'enabled': False}
+    
+    # Calculate checkpoint interval based on search size
+    if total_nodes > VERY_LONG_SEARCH_THRESHOLD:
+        checkpoint_interval = 1000000  # Every million nodes for very long searches
+    else:
+        checkpoint_interval = 100000   # Every 100k nodes for long searches
+    
+    # Create checkpoint directory if needed
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    # Create checkpoint filename with search parameters
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    search_params = (
+        f"L{len(config['optimization']['letters_to_assign'])}"
+        f"_K{len(config['optimization']['keys_to_assign'])}"
+        f"_C{len(config['optimization']['letters_to_constrain'])}"
+    )
+    checkpoint_path = os.path.join(
+        checkpoint_dir, 
+        f"search_{search_params}_{timestamp}.checkpoint"
+    )
+    
+    # Prepare metadata for checkpoint
+    metadata = {
+        'config': config,
+        'search_space': search_space,
+        'timestamp_start': timestamp,
+        'estimated_runtime': str(timedelta(seconds=int(estimated_runtime))),
+        'total_nodes': total_nodes
+    }
+    
+    return {
+        'enabled': True,
+        'interval': checkpoint_interval,
+        'path': checkpoint_path,
+        'metadata': metadata,
+        'last_save': time.time()
+    }
+
+def save_checkpoint(
+    checkpoint_path: str,
+    current_solutions: list,
+    processed_nodes: int,
+    depth_stats: dict,
+    constraint_stats: dict,
+    start_time: float
+) -> None:
+    """Save current search state to checkpoint file."""
+    checkpoint = {
+        'timestamp': time.time(),
+        'solutions': current_solutions,
+        'processed_nodes': processed_nodes,
+        'depth_stats': depth_stats,
+        'constraint_stats': constraint_stats,
+        'elapsed_time': time.time() - start_time
+    }
+    
+    # Use temporary file to ensure atomic write
+    temp_path = f"{checkpoint_path}.tmp"
+    with open(temp_path, 'wb') as f:
+        pickle.dump(checkpoint, f)
+    os.replace(temp_path, checkpoint_path)
+
+def load_checkpoint(checkpoint_path: str) -> dict:
+    """Load search state from checkpoint file."""
+    if os.path.exists(checkpoint_path):
+        with open(checkpoint_path, 'rb') as f:
+            return pickle.load(f)
+    return None
 
 def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
                         config: dict,
@@ -618,10 +717,16 @@ def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidate
     total_gb = total_bytes / (1024 * 1024 * 1024)
     available_gb = available_memory / (1024 * 1024 * 1024)
     
-    # Calculate statistics about the search space
+    # Calculate theoretical maximum arrangements
     total_arrangements = perm(n_positions, n_letters)
-    estimated_nodes_per_sec = 10000  # Based on typical performance
-    estimated_seconds = total_arrangements / estimated_nodes_per_sec
+    
+    # Estimate actual search space (considering constraints and pruning)
+    # Assume we'll only explore about 1% of the theoretical space due to pruning
+    estimated_search_space = total_arrangements // 100
+    
+    # Use more realistic nodes per second based on actual performance
+    estimated_nodes_per_sec = 100000  # Based on observed performance
+    estimated_seconds = estimated_search_space / estimated_nodes_per_sec
     estimated_runtime = str(timedelta(seconds=int(estimated_seconds)))
     
     return {
@@ -631,83 +736,12 @@ def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidate
         'available_memory_gb': available_gb,
         'memory_sufficient': total_bytes < (available_memory * 0.8),
         'estimated_runtime': estimated_runtime,
-        'search_space_size': total_arrangements,
-        'details': {
-            'comfort_matrix_mb': comfort_matrix_size / (1024 * 1024),
-            'freq_matrix_mb': freq_matrix_size / (1024 * 1024),
-            'working_memory_mb': working_memory / (1024 * 1024),
-            'core_memory_mb': core_memory / (1024 * 1024),
-            'bytes_per_candidate': bytes_per_candidate,
-            'max_queue_size': max_queue_size,
-            'avg_branching_factor': avg_branching_factor
+        'search_space_details': {
+            'theoretical_arrangements': total_arrangements,
+            'estimated_search_space': estimated_search_space,
+            'nodes_per_second': estimated_nodes_per_sec
         }
     }
-
-@jit(nopython=True, fastmath=True)
-def is_position_used(partial_mapping: np.ndarray, position: int) -> bool:
-    """Helper function to check if a position is used in partial mapping."""
-    # Check if any element equals position
-    for i in range(len(partial_mapping)):
-        if partial_mapping[i] == position and partial_mapping[i] >= 0:
-            return True
-    return False
-
-@jit(nopython=True, fastmath=True)
-def calculate_upper_bound(
-    partial_mapping: np.ndarray,
-    depth: int,
-    key_LR: np.ndarray,
-    comfort_matrix: np.ndarray,
-    letter_freqs: np.ndarray,
-    bigram_freqs: np.ndarray,
-    bigram_weight: float,
-    letter_weight: float
-) -> float:
-    """
-    Calculate upper bound with safe array comparisons.
-    """
-    n_letters = len(partial_mapping)
-    
-    # Get score for assigned positions (exact)
-    total_score, bigram_score, letter_score = calculate_layout_score_numba(
-        partial_mapping,
-        key_LR,
-        comfort_matrix,
-        bigram_freqs,
-        letter_freqs,
-        bigram_weight,
-        letter_weight
-    )
-    
-    if depth < n_letters:
-        remaining_letters = n_letters - depth
-        
-        # Best possible letter scores (using scalar operations)
-        max_comfort = np.float32(0.0)
-        for i in range(len(comfort_matrix)):
-            for j in range(len(comfort_matrix[i])):
-                if comfort_matrix[i,j] > max_comfort:
-                    max_comfort = comfort_matrix[i,j]
-        
-        remaining_freq_sum = np.float32(0.0)
-        for i in range(depth, len(letter_freqs)):
-            remaining_freq_sum += letter_freqs[i]
-            
-        max_letter_score = letter_weight * max_comfort * remaining_freq_sum
-        
-        # Best possible bigram scores (using scalar operations)
-        max_bigram_freq = np.float32(0.0)
-        for i in range(depth, len(bigram_freqs)):
-            for j in range(depth, len(bigram_freqs[i])):
-                if bigram_freqs[i,j] > max_bigram_freq:
-                    max_bigram_freq = bigram_freqs[i,j]
-                    
-        n_remaining_bigrams = (remaining_letters * (remaining_letters - 1)) // 2
-        max_bigram_score = bigram_weight * max_comfort * max_bigram_freq * n_remaining_bigrams
-        
-        total_score += max_letter_score + max_bigram_score
-    
-    return total_score
 
 @jit(nopython=True, fastmath=True)
 def calculate_layout_score_numba(
@@ -759,59 +793,157 @@ def calculate_layout_score_numba(
     
     return float(total_score), float(weighted_bigram), float(weighted_letter)
 
-def calculate_layout_score_debug(
-    letter_indices: np.ndarray,
-    key_LR: np.ndarray,   
-    comfort_matrix: np.ndarray,  
-    bigram_freqs: np.ndarray,    
-    letter_freqs: np.ndarray,    
-    bigram_weight: float,
-    letter_weight: float
-) -> tuple:
-    """Debug version of calculate_layout_score_numba without JIT compilation."""
-    print(f"\nDebug info:")
-    print(f"letter_indices: {letter_indices}")
+def calculate_total_arrangements(
+    n_letters: int,
+    n_positions: int,
+    letters_to_constrain: set,
+    keys_to_constrain: set,
+) -> int:
+    """Calculate actual number of possible arrangements."""
+    # First arrange constrained letters in constrained positions
+    constrained_arrangements = perm(len(keys_to_constrain), len(letters_to_constrain))
     
-    # Only calculate scores for valid positions
-    valid_positions = letter_indices >= 0
-    if not np.any(valid_positions):
-        print("No valid positions found, returning zeros")
-        return 0.0, 0.0, 0.0
+    # Then arrange remaining letters in remaining positions
+    remaining_letters = n_letters - len(letters_to_constrain)
+    remaining_positions = n_positions - len(letters_to_constrain)
+    unconstrained_arrangements = perm(remaining_positions, remaining_letters)
+    
+    # Multiply by permutations of letters within each group
+    total = (constrained_arrangements * factorial(len(letters_to_constrain)) * 
+             unconstrained_arrangements * factorial(remaining_letters))
+    
+    return total
+
+def exact_remaining_arrangements(
+    constrained_letters: set,
+    constrained_positions: set,
+    unconstrained_letters: int,
+    unconstrained_positions: int
+) -> int:
+    """
+    Calculate exact number of possible arrangements for remaining letters.
+    Ensures all inputs to perm() are non-negative.
+    """
+    # Validate inputs
+    if unconstrained_letters < 0 or unconstrained_positions < 0:
+        print(f"Warning: Invalid inputs to exact_remaining_arrangements:")
+        print(f"constrained_letters: {len(constrained_letters)}")
+        print(f"constrained_positions: {len(constrained_positions)}")
+        print(f"unconstrained_letters: {unconstrained_letters}")
+        print(f"unconstrained_positions: {unconstrained_positions}")
+        return 0
+
+    if not constrained_letters:
+        return perm(unconstrained_positions, unconstrained_letters) if unconstrained_positions >= unconstrained_letters else 0
         
-    # Calculate single-letter component
-    letter_component = np.float32(0.0)
-    for i in range(len(letter_indices)):
-        pos = letter_indices[i]
-        if pos >= 0:
-            curr_comfort = comfort_matrix[pos, pos]
-            curr_freq = letter_freqs[i]
-            curr_score = curr_comfort * curr_freq
-            letter_component += curr_score
-            print(f"Letter {i}: pos={pos}, comfort={curr_comfort}, freq={curr_freq}, score={curr_score}")
+    n_constrained = len(constrained_letters)
+    n_constrained_pos = len(constrained_positions)
     
-    # Calculate bigram component
-    bigram_component = np.float32(0.0)
-    for i in range(len(letter_indices)):
-        pos1 = letter_indices[i]
-        if pos1 >= 0:
-            for j in range(i + 1, len(letter_indices)):
-                pos2 = letter_indices[j]
-                if pos2 >= 0 and key_LR[pos1] == key_LR[pos2]:
-                    comfort_seq1 = comfort_matrix[pos1, pos2]
-                    freq_seq1 = bigram_freqs[i, j]
-                    comfort_seq2 = comfort_matrix[pos2, pos1]
-                    freq_seq2 = bigram_freqs[j, i]
-                    curr_score = (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
-                    bigram_component += curr_score
-                    print(f"Bigram {i}-{j}: pos1={pos1}, pos2={pos2}, comfort1={comfort_seq1}, "
-                          f"freq1={freq_seq1}, comfort2={comfort_seq2}, freq2={freq_seq2}, score={curr_score}")
+    # Ensure we have enough positions for constrained letters
+    if n_constrained_pos < n_constrained:
+        return 0
+        
+    constrained_arrangements = perm(n_constrained_pos, n_constrained)
     
-    weighted_bigram = bigram_component * bigram_weight / 2.0
-    weighted_letter = letter_component * letter_weight
-    total_score = weighted_bigram + weighted_letter
+    # Calculate arrangements for unconstrained letters
+    if unconstrained_letters > 0:
+        if unconstrained_positions < unconstrained_letters:
+            return 0
+        unconstrained_arrangements = perm(unconstrained_positions, unconstrained_letters)
+    else:
+        unconstrained_arrangements = 1
     
-    print(f"Final scores: total={total_score}, bigram={weighted_bigram}, letter={weighted_letter}")
-    return float(total_score), float(weighted_bigram), float(weighted_letter)
+    return (constrained_arrangements * factorial(n_constrained) * 
+            unconstrained_arrangements * factorial(unconstrained_letters))
+
+def calculate_total_nodes(
+    n_letters: int,
+    n_positions: int,
+    letters_to_constrain: set,
+    keys_to_constrain: set,
+    letters_assigned: set,
+    keys_assigned: set
+) -> dict:
+    """
+    Calculate exact number of nodes in search tree.
+    """
+    # First level: account for pre-assigned letters
+    available_positions = n_positions - len(keys_assigned)
+    remaining_letters = n_letters - len(letters_assigned)
+    
+    # Calculate constrained letter arrangements
+    n_constrained = len(letters_to_constrain)
+    n_constrained_positions = len(keys_to_constrain)
+    
+    # For each depth, calculate number of possibilities
+    depth_distributions = {}
+    total_nodes = 0
+    
+    # First handle constrained letters
+    for depth in range(n_constrained):
+        positions_at_depth = n_constrained_positions - depth
+        arrangements_at_depth = positions_at_depth * factorial(remaining_letters - depth)
+        depth_distributions[depth] = arrangements_at_depth
+        total_nodes += arrangements_at_depth
+    
+    # Then handle unconstrained letters
+    remaining_positions = available_positions - n_constrained
+    for depth in range(n_constrained, remaining_letters):
+        positions_at_depth = remaining_positions - (depth - n_constrained)
+        if positions_at_depth > 0:
+            arrangements_at_depth = positions_at_depth * factorial(remaining_letters - depth)
+            depth_distributions[depth] = arrangements_at_depth
+            total_nodes += arrangements_at_depth
+    
+    return {
+        'total_nodes': total_nodes,
+        'constrained_arrangements': factorial(n_constrained) * perm(n_constrained_positions, n_constrained),
+        'unconstrained_arrangements': factorial(remaining_letters - n_constrained) * 
+                                    perm(remaining_positions, remaining_letters - n_constrained),
+        'depth_distributions': depth_distributions,
+        'details': {
+            'available_positions': available_positions,
+            'remaining_letters': remaining_letters,
+            'constrained_letters': n_constrained,
+            'constrained_positions': n_constrained_positions
+        }
+    }
+
+@jit(nopython=True, fastmath=True)
+def calculate_upper_bound(
+    mapping: np.ndarray,
+    depth: int,
+    key_LR: np.ndarray,
+    comfort_matrix: np.ndarray,
+    letter_freqs: np.ndarray,
+    bigram_freqs: np.ndarray,
+    bigram_weight: float,
+    letter_weight: float,
+    constrained_depth: int  # Add this parameter
+) -> float:
+    """Calculate upper bound considering phases."""
+    # Get current score
+    current_score = calculate_layout_score_numba(
+        mapping, key_LR, comfort_matrix,
+        bigram_freqs, letter_freqs, bigram_weight, letter_weight
+    )[0]
+    
+    if depth < constrained_depth:
+        # In constrained phase, only consider remaining constrained positions
+        max_remaining = calculate_max_remaining_constrained(
+            mapping, depth, constrained_depth,
+            comfort_matrix, letter_freqs, bigram_freqs,
+            bigram_weight, letter_weight
+        )
+    else:
+        # In unconstrained phase, consider all remaining positions
+        max_remaining = calculate_max_remaining_unconstrained(
+            mapping, depth,
+            comfort_matrix, letter_freqs, bigram_freqs,
+            bigram_weight, letter_weight
+        )
+    
+    return current_score + max_remaining
 
 class HeapItem:
     """Helper class to make heap operations work with numpy arrays."""
@@ -832,7 +964,7 @@ def branch_and_bound_optimal(
     memory_threshold_gb: float = 0.9
 ) -> List[Tuple[float, Dict[str, str], Dict]]:
     """
-    Branch and bound implementation with support for assigned letters.
+    Branch and bound implementation with phased search for constrained letters.
     """
     # Get letters and keys from config
     letters_to_assign = config['optimization']['letters_to_assign']
@@ -842,14 +974,15 @@ def branch_and_bound_optimal(
     letters_assigned = config['optimization'].get('letters_assigned', '')
     keys_assigned = config['optimization'].get('keys_assigned', '')
 
-    # Convert to lowercase for consistency
+    # Convert to lowercase/uppercase for consistency
     letters_to_assign = letters_to_assign.lower()
-    keys_to_assign = keys_to_assign.upper()  # Convention: keys are uppercase
+    keys_to_assign = keys_to_assign.upper()
     letters_to_constrain = letters_to_constrain.lower()
     keys_to_constrain = keys_to_constrain.upper()
     letters_assigned = letters_assigned.lower()
     keys_assigned = keys_assigned.upper()
 
+    # Initialize dimensions and arrays
     n_letters_to_assign = len(letters_to_assign)
     n_keys_to_assign = len(keys_to_assign)
     is_full_layout = n_letters_to_assign == n_keys_to_assign
@@ -857,18 +990,27 @@ def branch_and_bound_optimal(
     key_LR, comfort_matrix, letter_freqs, bigram_freqs = arrays
     bigram_weight, letter_weight = weights
     
-    # Initialize candidates list and top solutions
+    # Separate constrained and unconstrained letters
+    constrained_indices = [i for i, letter in enumerate(letters_to_assign) if letter in letters_to_constrain]
+    unconstrained_indices = [i for i, letter in enumerate(letters_to_assign) if letter not in letters_to_constrain]
+    
+    # Convert constrained positions to indices
+    constrained_positions = [i for i, key in enumerate(keys_to_assign) if key in keys_to_constrain]
+    
+    print("\nSearch configuration:")
+    print(f"Phase 1: Arrange {len(constrained_indices)} constrained letters in {len(constrained_positions)} positions")
+    print(f"Phase 2: Arrange {len(unconstrained_indices)} letters in remaining positions")
+    
+    # Initialize search structures
     candidates = []
     top_n_solutions = []
     worst_top_n_score = float('-inf')
     
-    # Initialize mapping with all positions as -1
+    # Initialize mapping and used positions
     initial_mapping = np.full(n_letters_to_assign, -1, dtype=np.int32)
-    
-    # Create initial used positions array
     initial_used = np.zeros(n_keys_to_assign, dtype=bool)
     
-    # Handle assigned letters if any
+    # Handle pre-assigned letters
     if letters_assigned:
         letter_to_idx = {letter: idx for idx, letter in enumerate(letters_to_assign)}
         key_to_pos = {key: pos for pos, key in enumerate(keys_to_assign)}
@@ -879,23 +1021,9 @@ def branch_and_bound_optimal(
                 pos = key_to_pos[key]
                 initial_mapping[idx] = pos
                 initial_used[pos] = True
-    
-    # Find first unassigned position for start depth
-    start_depth = 0
-    while start_depth < n_letters_to_assign and initial_mapping[start_depth] >= 0:
-        start_depth += 1
-    
-    # Calculate total nodes for progress tracking
-    total_nodes = 0
-    remaining_letters = n_letters_to_assign - len(letters_assigned)
-    for depth in range(remaining_letters):
-        if is_full_layout:
-            total_nodes += perm(n_keys_to_assign - len(letters_assigned) - depth, 1)
-        else:
-            total_nodes += comb(n_keys_to_assign - len(letters_assigned) - depth, 1)
+                print(f"Pre-assigned: {letter} -> {key} (position {pos})")
     
     # Calculate initial score
-    #score_tuple = calculate_layout_score_numba(
     score_tuple = calculate_layout_score_numba(
         initial_mapping,
         key_LR,
@@ -906,15 +1034,23 @@ def branch_and_bound_optimal(
         letter_weight
     )
     initial_score = score_tuple[0]
-
-    # Create HeapItem for initial state
-    heapq.heappush(candidates, HeapItem(-initial_score, start_depth, initial_mapping, initial_used))
+    
+    # Start search
+    heapq.heappush(candidates, HeapItem(-initial_score, 0, initial_mapping, initial_used))
     
     processed_nodes = 0
     start_time = time.time()
+    n_depths = n_letters_to_assign + 1
+    depth_stats = {depth: {'visited': 0, 'pruned': 0} for depth in range(n_depths)}
+    constraint_stats = {'satisfied': 0, 'violated': 0}
     
-    with tqdm(total=total_nodes, desc="Optimizing layout") as pbar:
+    def is_constrained_phase(depth: int) -> bool:
+        return depth < len(constrained_indices)
+    
+    print("\nStarting search...")
+    with tqdm(total=n_letters_to_assign, desc="Optimizing layout") as pbar:
         while candidates:
+            # Memory check
             if psutil.virtual_memory().percent > memory_threshold_gb * 100:
                 print("\nWarning: Memory usage high, saving current best solutions")
                 break
@@ -939,23 +1075,15 @@ def branch_and_bound_optimal(
                 )
                 total_score, bigram_score, letter_score = score_tuple
                 
-                # Convert numpy float32 to Python float
-                total_score_float = float(total_score)
-                bigram_score_float = float(bigram_score)
-                letter_score_float = float(letter_score)
-                
                 if (len(top_n_solutions) < n_solutions or 
-                    total_score_float > worst_top_n_score):
-                    # Create solution tuple with Python types, not numpy arrays
+                    total_score > worst_top_n_score):
                     solution = (
-                        total_score_float,
-                        bigram_score_float,
-                        letter_score_float,
-                        mapping.tolist()  # Convert numpy array to list
+                        float(total_score),
+                        float(bigram_score),
+                        float(letter_score),
+                        mapping.tolist()
                     )
-                    
-                    # Create heap item with Python types
-                    heap_item = (-total_score_float, len(top_n_solutions), solution)  # Add index as tiebreaker
+                    heap_item = (-float(total_score), len(top_n_solutions), solution)
                     heapq.heappush(top_n_solutions, heap_item)
                     
                     if len(top_n_solutions) > n_solutions:
@@ -963,62 +1091,59 @@ def branch_and_bound_optimal(
                     
                     if top_n_solutions:
                         worst_top_n_score = -top_n_solutions[0][0]
-    
+                        print(f"\nNew solution found (score: {total_score:.4f})")
+                        print(f"Current best score: {-top_n_solutions[0][0]:.4f}")
+                
+                depth_stats[depth]['visited'] += 1
                 pbar.update(1)
                 processed_nodes += 1
                 continue
             
-            # Prune incomplete solutions using upper bound
+            # Only prune if we have enough solutions and can prove this branch won't yield better ones
             if len(top_n_solutions) >= n_solutions:
                 upper_bound = calculate_upper_bound(
                     mapping, depth, key_LR, comfort_matrix,
                     letter_freqs, bigram_freqs, bigram_weight, letter_weight
                 )
-                if upper_bound <= worst_top_n_score:
-                    remaining_levels = n_letters_to_assign - depth
-                    skipped_nodes = sum(
-                        perm(n_keys_to_assign - d, 1) if is_full_layout else comb(n_keys_to_assign - d, 1)
-                        for d in range(depth, depth + remaining_levels)
-                    )
-                    pbar.update(skipped_nodes)
-                    processed_nodes += skipped_nodes
+                
+                if upper_bound < worst_top_n_score:
+                    depth_stats[depth]['pruned'] += 1
+                    processed_nodes += 1
+                    pbar.update(0)  # Update without incrementing
                     continue
             
-            # Try each available position, respecting constraints
+            # Try each available position
             nodes_at_depth = 0
             current_letter = letters_to_assign[depth]
             
-            # Skip if letter is already assigned (check initial_mapping)
+            # Skip if letter is already assigned
             if initial_mapping[depth] >= 0:
-                # Create new state with same mapping but increment depth
                 heapq.heappush(
                     candidates,
                     HeapItem(-score, depth + 1, mapping, used)
                 )
                 continue
-                
+            
             for pos in range(n_keys_to_assign):
                 if not used[pos]:
-                    # Skip if position is already assigned
-                    if pos in initial_mapping[initial_mapping >= 0]:
-                        continue
-                        
-                    # Check constraints
-                    if current_letter in letters_to_constrain:
-                        if keys_to_assign[pos] not in keys_to_constrain:
+                    # Handle phases
+                    if is_constrained_phase(depth):
+                        # In constrained phase, only use constrained positions
+                        if pos not in constrained_positions:
                             continue
-                    elif keys_to_assign[pos] in keys_to_constrain:
-                        if current_letter not in letters_to_constrain:
+                    else:
+                        # In unconstrained phase, skip constrained positions if not used by constrained letters
+                        if pos in constrained_positions and pos not in mapping:
                             continue
-                                      
+                    
                     # Create new state
                     new_mapping = mapping.copy()
-                    new_mapping[depth] = pos  
+                    new_mapping[depth] = pos
                     new_used = used.copy()
                     new_used[pos] = True
                     
-                    # Calculate score for new state
-                    score_tuple = calculate_layout_score_numba(  
+                    # Calculate score
+                    score_tuple = calculate_layout_score_numba(
                         new_mapping,
                         key_LR,
                         comfort_matrix,
@@ -1035,31 +1160,21 @@ def branch_and_bound_optimal(
                             candidates,
                             HeapItem(-new_score, depth + 1, new_mapping, new_used)
                         )
+                        depth_stats[depth]['visited'] += 1
+                    else:
+                        depth_stats[depth]['pruned'] += 1
                     
                     nodes_at_depth += 1
             
-            pbar.update(nodes_at_depth)
+            pbar.update(0)  # Update progress bar
             processed_nodes += nodes_at_depth
-            
-            # Update progress and ETA
-            if processed_nodes % 100 == 0:
-                elapsed = time.time() - start_time
-                if elapsed > 0:
-                    nodes_per_second = processed_nodes / elapsed
-                    remaining_nodes = total_nodes - processed_nodes
-                    eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else 0
-                    eta_str = str(timedelta(seconds=int(eta_seconds)))
-                    pbar.set_postfix({
-                        'ETA': eta_str,
-                        'Memory': f"{psutil.Process().memory_info().rss / 1024**3:.1f}GB"
-                    })
     
     # Convert solutions
     solutions = []
+    print(f"\nConverting {len(top_n_solutions)} solutions...")
     while top_n_solutions:
         _, _, solution = heapq.heappop(top_n_solutions)
         total_score, bigram_score, letter_score, mapping_list = solution
-        # Convert back to numpy array if needed
         mapping = np.array(mapping_list, dtype=np.int32)
         letter_mapping = dict(zip(letters_to_assign, [keys_to_assign[i] for i in mapping]))
         solutions.append((
@@ -1076,59 +1191,44 @@ def branch_and_bound_optimal(
 
 def optimize_layout(config: dict) -> None:
     """
-    Main optimization function with improved memory estimation and runtime prediction.
+    Main optimization function.
     """
-    # Validate configuration
+    # Get parameters from config
     letters_to_assign = config['optimization']['letters_to_assign']
     keys_to_assign = config['optimization']['keys_to_assign']
-    letters_to_constrain = config['optimization']['letters_to_constrain']
-    keys_to_constrain = config['optimization']['keys_to_constrain']
+    letters_to_constrain = config['optimization'].get('letters_to_constrain', '')
+    keys_to_constrain = config['optimization'].get('keys_to_constrain', '')
     letters_assigned = config['optimization'].get('letters_assigned', '')
     keys_assigned = config['optimization'].get('keys_assigned', '')
     
+    print("\nConfiguration:")
+    print(f"Letters to assign: {letters_to_assign}")
+    print(f"Keys to assign: {keys_to_assign}")
+    print(f"Letters to constrain: {letters_to_constrain}")
+    print(f"Keys to constrain: {keys_to_constrain}")
+    print(f"Letters assigned: {letters_assigned}")
+    print(f"Keys assigned: {keys_assigned}")
+    
+    # Validate configuration
     validate_optimization_inputs(config)
-
-    is_full_layout = len(letters_to_assign) == len(keys_to_assign)
     
-    # Calculate arrangements
-    if is_full_layout:
-        total_arrangements = perm(len(keys_to_assign), len(letters_to_assign))
-    else:
-        positions_choices = comb(len(keys_to_assign), len(letters_to_assign))
-        letter_arrangements = factorial(len(letters_to_assign))
-        total_arrangements = positions_choices * letter_arrangements
+    # Calculate exact search space size
+    search_space = calculate_total_nodes(
+        n_letters=len(letters_to_assign),
+        n_positions=len(keys_to_assign),
+        letters_to_constrain=set(letters_to_constrain),
+        keys_to_constrain=set(keys_to_constrain),
+        letters_assigned=set(letters_assigned),
+        keys_assigned=set(keys_assigned)
+    )
     
-    # Print initial information
-    print(f"Letters to arrange:      {letters_to_assign.upper()}")
-    print(f"Available positions:     {keys_to_assign.upper()}")
-    print(f"Letters to constrain:    {letters_to_constrain.upper()}")
-    print(f"Positions to constrain:  {keys_to_constrain.upper()}")
-    print(f"Layout type:             {'Full (N=M)' if is_full_layout else 'Partial (N<M)'}")
-    print(f"Total arrangements:      {total_arrangements:,}")
-    if not is_full_layout:
-        print(f"  - Position choices:    {positions_choices:,}")
-        print(f"  - Letter arrangements: {letter_arrangements:,}")
-    
-    # Calculate memory requirements with more accurate estimation
-    memory_estimate = estimate_memory_requirements(len(letters_to_assign), len(keys_to_assign), max_candidates=1000)
-    
-    print("\nMemory and Runtime Estimates:")
-    print(f"Estimated memory usage:  {memory_estimate['estimated_gb']:.2f} GB")
-    print(f"Available memory:        {memory_estimate['available_memory_gb']:.2f} GB")
-    print(f"Memory sufficient:       {memory_estimate['memory_sufficient']}")
-    print(f"Estimated runtime:       {memory_estimate['estimated_runtime']}")
-    print("\nSearch space details:")
-    print(f"Max queue size:          {memory_estimate['details']['max_queue_size']:,}")
-    print(f"Avg branching factor:    {memory_estimate['details']['avg_branching_factor']:.1f}")
-    print(f"Memory per candidate:    {memory_estimate['details']['bytes_per_candidate']:,} bytes")
-    
-    #user_continue = input("\nContinue with optimization? (y/n): ")
-    #if user_continue.lower() != 'y':
-    #    print("Optimization cancelled.")
-    #    return
-    
-    if not memory_estimate['memory_sufficient']:
-        raise MemoryError("Insufficient memory available for optimization")
+    print("\nSearch space analysis:")
+    print(f"Total arrangements: {search_space['total_nodes']:,}")
+    print(f"  - Constrained phase arrangements: {search_space['constrained_arrangements']:,}")
+    print(f"  - Unconstrained phase arrangements: {search_space['unconstrained_arrangements']:,}")
+    print("\nSearch tree by depth:")
+    for depth, nodes in search_space['depth_distributions'].items():
+        print(f"Depth {depth}: {nodes:,} nodes")
         
     # Show initial keyboard
     visualize_keyboard_layout(
@@ -1165,6 +1265,11 @@ def optimize_layout(config: dict) -> None:
     # Get number of layouts from config
     n_layouts = config['optimization'].get('nlayouts', 5)
     
+    print("\nStarting optimization with:")
+    print(f"- {len(letters_to_constrain)} constrained letters: {letters_to_constrain}")
+    print(f"- {len(keys_to_constrain)} constrained positions: {keys_to_constrain}")
+    print(f"- Finding top {n_layouts} solutions")
+    
     # Run optimization
     results = branch_and_bound_optimal(
         arrays=arrays,
@@ -1172,7 +1277,7 @@ def optimize_layout(config: dict) -> None:
         config=config,
         n_solutions=n_layouts
     )
-
+    
     # Sort and save results
     sorted_results = sorted(
         results,
@@ -1192,7 +1297,7 @@ def optimize_layout(config: dict) -> None:
         keys_to_display=keys_assigned
     )
     save_results_to_csv(sorted_results, config)
-
+    
 #--------------------------------------------------------------------
 # Pipeline
 #--------------------------------------------------------------------
