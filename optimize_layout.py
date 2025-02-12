@@ -788,48 +788,6 @@ def calculate_layout_score(
     
     return float(total_score), float(letter_component), float(norm_bigram_component)
 
-def exact_remaining_arrangements(
-    constrained_letters: set,
-    constrained_positions: set,
-    unconstrained_letters: int,
-    unconstrained_positions: int
-) -> int:
-    """
-    Calculate exact number of possible arrangements for remaining letters.
-    Ensures all inputs to perm() are non-negative.
-    """
-    # Validate inputs
-    if unconstrained_letters < 0 or unconstrained_positions < 0:
-        print(f"Warning: Invalid inputs to exact_remaining_arrangements:")
-        print(f"constrained_letters: {len(constrained_letters)}")
-        print(f"constrained_positions: {len(constrained_positions)}")
-        print(f"unconstrained_letters: {unconstrained_letters}")
-        print(f"unconstrained_positions: {unconstrained_positions}")
-        return 0
-
-    if not constrained_letters:
-        return perm(unconstrained_positions, unconstrained_letters) if unconstrained_positions >= unconstrained_letters else 0
-        
-    n_constrained = len(constrained_letters)
-    n_constrained_pos = len(constrained_positions)
-    
-    # Ensure we have enough positions for constrained letters
-    if n_constrained_pos < n_constrained:
-        return 0
-        
-    constrained_arrangements = perm(n_constrained_pos, n_constrained)
-    
-    # Calculate arrangements for unconstrained letters
-    if unconstrained_letters > 0:
-        if unconstrained_positions < unconstrained_letters:
-            return 0
-        unconstrained_arrangements = perm(unconstrained_positions, unconstrained_letters)
-    else:
-        unconstrained_arrangements = 1
-    
-    return (constrained_arrangements * factorial(n_constrained) * 
-            unconstrained_arrangements * factorial(unconstrained_letters))
-
 def calculate_total_nodes(
     n_letters: int,
     n_positions: int,
@@ -838,48 +796,32 @@ def calculate_total_nodes(
     letters_assigned: set,
     keys_assigned: set
 ) -> dict:
-    """
-    Calculate exact number of nodes in search tree.
-    """
-    # First level: account for pre-assigned letters
+    """Calculate exact number of nodes for two-phase search."""
+    # Account for pre-assigned letters
     available_positions = n_positions - len(keys_assigned)
     remaining_letters = n_letters - len(letters_assigned)
     
-    # Calculate constrained letter arrangements
+    # Phase 1: Arrange constrained letters
     n_constrained = len(letters_to_constrain)
     n_constrained_positions = len(keys_to_constrain)
+    total_nodes_phase1 = perm(n_constrained_positions, n_constrained)
     
-    # For each depth, calculate number of possibilities
-    depth_distributions = {}
-    total_nodes = 0
-    
-    # First handle constrained letters
-    for depth in range(n_constrained):
-        positions_at_depth = n_constrained_positions - depth
-        arrangements_at_depth = positions_at_depth * factorial(remaining_letters - depth)
-        depth_distributions[depth] = arrangements_at_depth
-        total_nodes += arrangements_at_depth
-    
-    # Then handle unconstrained letters
+    # Phase 2: For each Phase 1 solution, arrange remaining letters
     remaining_positions = available_positions - n_constrained
-    for depth in range(n_constrained, remaining_letters):
-        positions_at_depth = remaining_positions - (depth - n_constrained)
-        if positions_at_depth > 0:
-            arrangements_at_depth = positions_at_depth * factorial(remaining_letters - depth)
-            depth_distributions[depth] = arrangements_at_depth
-            total_nodes += arrangements_at_depth
+    remaining_unconstrained = remaining_letters - n_constrained
+    nodes_per_phase1 = perm(remaining_positions, remaining_unconstrained)
+    total_nodes_phase2 = nodes_per_phase1 * total_nodes_phase1
     
     return {
-        'total_nodes': total_nodes,
-        'constrained_arrangements': factorial(n_constrained) * perm(n_constrained_positions, n_constrained),
-        'unconstrained_arrangements': factorial(remaining_letters - n_constrained) * 
-                                      perm(remaining_positions, remaining_letters - n_constrained),
-        'depth_distributions': depth_distributions,
+        'total_nodes': total_nodes_phase1 + total_nodes_phase2,
+        'phase1_arrangements': total_nodes_phase1,
+        'phase2_arrangements': total_nodes_phase2,
         'details': {
             'available_positions': available_positions,
             'remaining_letters': remaining_letters,
             'constrained_letters': n_constrained,
-            'constrained_positions': n_constrained_positions
+            'constrained_positions': n_constrained_positions,
+            'arrangements_per_phase1': nodes_per_phase1
         }
     }
 
@@ -1281,7 +1223,11 @@ def branch_and_bound_optimal(
                 pbar.update(1)
                 continue
             
+            #-----------------------------------------------------------------
+            # PRUNING CHECK 1: 
+            # Prune the current candidate before we even try expanding it to new positions
             # Only prune if we have enough solutions and can prove this branch won't yield better ones
+            #-----------------------------------------------------------------
             if len(top_n_solutions) >= n_solutions:
                 upper_bound = calculate_upper_bound(
                     mapping, depth, used, key_LR, comfort_matrix,
@@ -1307,10 +1253,6 @@ def branch_and_bound_optimal(
                 new_mapping[depth] = pos
                 new_used = used.copy()
                 new_used[pos] = True
-                
-                # Validate partial solution
-                if not validate_mapping(new_mapping, constrained_letter_indices, constrained_positions):
-                    continue
                     
                 # Calculate score
                 score_tuple = calculate_layout_score(
@@ -1324,18 +1266,19 @@ def branch_and_bound_optimal(
                 )
                 new_score = score_tuple[0]
                 
-                # Add to candidates if promising
-                upper_bound = calculate_upper_bound(
-                    new_mapping, depth + 1, new_used, key_LR, comfort_matrix,
-                    letter_freqs, bigram_freqs, bigram_weight, letter_weight
-                )
-                
-                if len(top_n_solutions) < n_solutions:
+                #-----------------------------------------------------------------
+                # PRUNING CHECK 2: 
+                # Prune each new candidate we create by assigning positions.
+                # Add candidate if either:
+                # 1. We need more solutions OR
+                # 2. This branch could yield a better solution than our current worst
+                #-----------------------------------------------------------------
+                if len(top_n_solutions) < n_solutions or (new_score + upper_bound) > worst_top_n_score:
                     heapq.heappush(
                         candidates,
                         HeapItem(-new_score, depth + 1, new_mapping, new_used)
                     )
-                
+                                    
                 nodes_at_depth += 1
             
             processed_nodes += nodes_at_depth
@@ -1423,15 +1366,14 @@ def optimize_layout(config: dict) -> None:
         letters_assigned=set(letters_assigned),
         keys_assigned=set(keys_assigned)
     )
-    
     print("\nSearch space analysis:")
-    print(f"Total arrangements: {search_space['total_nodes']:,}")
-    print(f"  - Constrained phase arrangements: {search_space['constrained_arrangements']:,}")
-    print(f"  - Unconstrained phase arrangements: {search_space['unconstrained_arrangements']:,}")
-    print("\nSearch tree by depth:")
-    for depth, nodes in search_space['depth_distributions'].items():
-        print(f"Depth {depth}: {nodes:,} nodes")
-        
+    print(f"Phase 1 (Constrained letters):")
+    print(f"  - {search_space['phase1_arrangements']:,} nodes")
+    print(f"Phase 2 (Remaining letters):")
+    print(f"  - {search_space['phase2_arrangements']:,} total nodes")
+    print(f"  - {search_space['details']['arrangements_per_phase1']:,} arrangements per Phase 1 solution")
+    print(f"\nTotal nodes to explore: {search_space['total_nodes']:,}")
+
     # Show initial keyboard
     visualize_keyboard_layout(
         mapping=None,
