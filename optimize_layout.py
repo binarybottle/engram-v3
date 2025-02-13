@@ -1,4 +1,4 @@
-# # engram-v3/optimize_layout.py
+# engram-v3/optimize_layout.py
 """
 Memory-efficient keyboard layout optimization using branch and bound search.
 
@@ -288,133 +288,12 @@ def prepare_arrays(
     
     return key_LR, comfort_matrix, letter_freqs, bigram_freqs
 
-def prepare_assigned_indices(letters: str, letters_assigned: str, keys: str, keys_assigned: str) -> np.ndarray:
-    """
-    Create array of assigned positions (-1 for unassigned letters)
-    
-    Args:
-        letters: String of all letters being optimized
-        letters_assigned: String of pre-assigned letters
-        keys: String of all available keys
-        keys_assigned: String of keys where letters are pre-assigned
-        
-    Returns:
-        numpy array of indices where assigned letters are marked with their position index
-        and unassigned letters are marked with -1
-        
-    Example:
-        letters = "abcdef"
-        letters_assigned = "ac"
-        keys = "FDSVRA"
-        keys_assigned = "FR"
-        Result: [-1, 0, -1, 1, -1, -1] # 'a' assigned to position 0 (F), 'c' to position 1 (R)
-    """
-    n_letters = len(letters)
-    assigned_indices = np.full(n_letters, -1, dtype=np.int32)
-    
-    if letters_assigned and keys_assigned:
-        # Create letter to index mapping for input letters
-        letter_to_idx = {letter: idx for idx, letter in enumerate(letters)}
-        # Create key to position mapping for input keys
-        key_to_pos = {key: pos for pos, key in enumerate(keys)}
-        
-        # For each assigned letter-key pair
-        for letter, key in zip(letters_assigned, keys_assigned):
-            # Only process if both letter and key are in our mappings
-            if letter in letter_to_idx and key in key_to_pos:
-                idx = letter_to_idx[letter]
-                pos = key_to_pos[key]
-                assigned_indices[idx] = pos
-                
-    return assigned_indices
-
-def setup_checkpointing(config: dict, search_space: dict) -> dict:
-    """
-    Configure checkpointing based on search space size and estimated runtime.
-    
-    Returns:
-        dict with checkpoint settings:
-        - enabled: bool, whether checkpointing is enabled
-        - interval: int, nodes between checkpoints
-        - path: str, checkpoint file path
-        - metadata: dict, search configuration data
-    """
-    # Estimate if checkpointing is needed based on search space size
-    LONG_SEARCH_THRESHOLD = 1e9  # 1 billion nodes
-    VERY_LONG_SEARCH_THRESHOLD = 1e12  # 1 trillion nodes
-    
-    total_nodes = search_space['total_nodes']
-    estimated_nodes_per_second = 100000  # Conservative estimate
-    estimated_runtime = total_nodes / estimated_nodes_per_second
-    
-    # Determine if we need checkpointing
-    checkpointing_enabled = total_nodes > LONG_SEARCH_THRESHOLD
-    
-    if not checkpointing_enabled:
-        return {'enabled': False}
-    
-    # Calculate checkpoint interval based on search size
-    if total_nodes > VERY_LONG_SEARCH_THRESHOLD:
-        checkpoint_interval = 1000000  # Every million nodes for very long searches
-    else:
-        checkpoint_interval = 100000   # Every 100k nodes for long searches
-    
-    # Create checkpoint directory if needed
-    checkpoint_dir = "checkpoints"
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    # Create checkpoint filename with search parameters
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    search_params = (
-        f"L{len(config['optimization']['letters_to_assign'])}"
-        f"_K{len(config['optimization']['keys_to_assign'])}"
-        f"_C{len(config['optimization']['letters_to_constrain'])}"
-    )
-    checkpoint_path = os.path.join(
-        checkpoint_dir, 
-        f"search_{search_params}_{timestamp}.checkpoint"
-    )
-    
-    # Prepare metadata for checkpoint
-    metadata = {
-        'config': config,
-        'search_space': search_space,
-        'timestamp_start': timestamp,
-        'estimated_runtime': str(timedelta(seconds=int(estimated_runtime))),
-        'total_nodes': total_nodes
-    }
-    
-    return {
-        'enabled': True,
-        'interval': checkpoint_interval,
-        'path': checkpoint_path,
-        'metadata': metadata,
-        'last_save': time.time()
-    }
-
 def validate_mapping(mapping: np.ndarray, constrained_letter_indices: set, constrained_positions: set) -> bool:
     """Validate that mapping follows all constraints."""
     for idx in constrained_letter_indices:
         if mapping[idx] >= 0 and mapping[idx] not in constrained_positions:
             return False
     return True
-
-def save_checkpoint(
-    checkpoint_path: str,
-    current_state: dict
-) -> None:
-    """Save current search state to checkpoint file."""
-    temp_path = f"{checkpoint_path}.tmp"
-    with open(temp_path, 'wb') as f:
-        pickle.dump(current_state, f)
-    os.replace(temp_path, checkpoint_path)
-
-def load_checkpoint(checkpoint_path: str) -> dict:
-    """Load search state from checkpoint file."""
-    if os.path.exists(checkpoint_path):
-        with open(checkpoint_path, 'rb') as f:
-            return pickle.load(f)
-    return None
 
 def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
                         config: dict,
@@ -501,110 +380,7 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
     print(f"\nResults saved to: {output_path}")
 
 #-----------------------------------------------------------------------------
-# Visualizing functions
-#-----------------------------------------------------------------------------
-def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layout", config: dict = None, letters_to_display: str = None, keys_to_display: str = None) -> None:
-    """
-    Print a visual representation of the keyboard layout showing both mapped and assigned letters.
-    """
-    # Key mapping for special characters
-    key_mapping = {
-        ';': 'sc',  # semicolon
-        ',': 'cm',  # comma
-        '.': 'dt',  # dot/period
-        '/': 'sl'   # forward slash
-    }
-
-    # Ensure we have a config
-    if config is None:
-        raise ValueError("Configuration must be provided")
-        
-    # Create layout characters dictionary with empty spaces
-    layout_chars = {
-        'title': title,
-        'q': ' ', 'w': ' ', 'e': ' ', 'r': ' ',
-        'u': ' ', 'i': ' ', 'o': ' ', 'p': ' ',
-        'a': ' ', 's': ' ', 'd': ' ', 'f': ' ',
-        'j': ' ', 'k': ' ', 'l': ' ', 'sc': ' ',
-        'z': ' ', 'x': ' ', 'c': ' ', 'v': ' ',
-        'm': ' ', 'cm': ' ', 'dt': ' ', 'sl': ' '
-    }
-    
-    # First apply assigned letters from config
-    letters_assigned = config['optimization'].get('letters_assigned', '').lower()
-    keys_assigned = config['optimization'].get('keys_assigned', '').lower()
-    
-    if letters_assigned and keys_assigned:
-        for letter, key in zip(letters_assigned, keys_assigned):
-            converted_key = key_mapping.get(key.lower(), key.lower())
-            layout_chars[converted_key] = letter.lower()
-    
-    # Then mark positions to be filled from keys_to_assign
-    if not mapping:
-        keys_to_mark = config['optimization'].get('keys_to_assign', '').lower()
-        for key in keys_to_mark:
-            if key not in keys_assigned:  # Skip if already assigned
-                converted_key = key_mapping.get(key, key)
-                layout_chars[converted_key] = '-'
-    
-    # Fill in letters from letters_to_display and keys_to_display
-    if letters_to_display and keys_to_display:
-        if len(letters_to_display) != len(keys_to_display):
-            raise ValueError("letters_to_display and keys_to_display must have the same length")
-            
-        for letter, key in zip(letters_to_display, keys_to_display):
-            converted_key = key_mapping.get(key.lower(), key.lower())
-            layout_chars[converted_key] = letter.lower()
-    
-    # Fill in letters from mapping
-    if mapping:
-        for letter, key in mapping.items():
-            converted_key = key_mapping.get(key.lower(), key.lower())
-            current_char = layout_chars[converted_key]
-            
-            # If there's already an assigned letter, combine them
-            if current_char.strip() and current_char != '_':
-                # Put mapped letter (uppercase) first, then assigned letter (lowercase)
-                layout_chars[converted_key] = f"{letter.upper()}{current_char}"
-            else:
-                # Just show the mapped letter in uppercase
-                layout_chars[converted_key] = letter.upper()
-
-    # Get template from config and print
-    template = config['visualization']['keyboard_template']
-    print(template.format(**layout_chars))
-
-def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
-                      config: dict,
-                      n: int = None,
-                      letters_to_display: str = None,
-                      keys_to_display: str = None) -> None:
-    """
-    Print the top N results with their scores and mappings.
-    
-    Args:
-        results: List of (score, mapping, detailed_scores) tuples
-        config: Configuration dictionary
-        n: Number of layouts to display (defaults to config['optimization']['nlayouts'])
-        letters_to_display: Letters that have already been assigned
-        keys_to_display: Keys that have already been assigned
-    """
-    if n is None:
-        n = config['optimization'].get('nlayouts', 5)
-    
-    print(f"\nTop {n} scoring layouts:")
-    for i, (score, mapping, detailed_scores) in enumerate(results[:n], 1):
-        print(f"\n#{i}: Score: {score:.4f}")
-        visualize_keyboard_layout(
-            mapping=mapping,
-            title=f"Layout #{i}", 
-            letters_to_display=letters_to_display,
-            keys_to_display=keys_to_display,
-            config=config
-        )
-        
-#-----------------------------------------------------------------------------
-# Optimizing functions (with numba)
+# Memory and checkpointing functions
 #-----------------------------------------------------------------------------
 def calculate_memory_upper_bound(n_letters: int, n_positions: int) -> dict:
     """
@@ -736,6 +512,255 @@ def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidate
         }
     }
 
+def setup_checkpointing(config: dict, search_space: dict) -> dict:
+    """
+    Configure checkpointing based on search space size and estimated runtime.
+    
+    Returns:
+        dict with checkpoint settings:
+        - enabled: bool, whether checkpointing is enabled
+        - interval: int, nodes between checkpoints
+        - path: str, checkpoint file path
+        - metadata: dict, search configuration data
+    """
+    # Estimate if checkpointing is needed based on search space size
+    LONG_SEARCH_THRESHOLD = 1e9  # 1 billion nodes
+    VERY_LONG_SEARCH_THRESHOLD = 1e12  # 1 trillion nodes
+    
+    total_nodes = search_space['total_nodes']
+    estimated_nodes_per_second = 100000  # Conservative estimate
+    estimated_runtime = total_nodes / estimated_nodes_per_second
+    
+    # Determine if we need checkpointing
+    checkpointing_enabled = total_nodes > LONG_SEARCH_THRESHOLD
+    
+    if not checkpointing_enabled:
+        return {'enabled': False}
+    
+    # Calculate checkpoint interval based on search size
+    if total_nodes > VERY_LONG_SEARCH_THRESHOLD:
+        checkpoint_interval = 1000000  # Every million nodes for very long searches
+    else:
+        checkpoint_interval = 100000   # Every 100k nodes for long searches
+    
+    # Create checkpoint directory if needed
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    # Create checkpoint filename with search parameters
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    search_params = (
+        f"L{len(config['optimization']['letters_to_assign'])}"
+        f"_K{len(config['optimization']['keys_to_assign'])}"
+        f"_C{len(config['optimization']['letters_to_constrain'])}"
+    )
+    checkpoint_path = os.path.join(
+        checkpoint_dir, 
+        f"search_{search_params}_{timestamp}.checkpoint"
+    )
+    
+    # Prepare metadata for checkpoint
+    metadata = {
+        'config': config,
+        'search_space': search_space,
+        'timestamp_start': timestamp,
+        'estimated_runtime': str(timedelta(seconds=int(estimated_runtime))),
+        'total_nodes': total_nodes
+    }
+    
+    return {
+        'enabled': True,
+        'interval': checkpoint_interval,
+        'path': checkpoint_path,
+        'metadata': metadata,
+        'last_save': time.time()
+    }
+
+def save_checkpoint(
+    checkpoint_path: str,
+    current_state: dict
+) -> None:
+    """Save current search state to checkpoint file."""
+    temp_path = f"{checkpoint_path}.tmp"
+    with open(temp_path, 'wb') as f:
+        pickle.dump(current_state, f)
+    os.replace(temp_path, checkpoint_path)
+
+def load_checkpoint(checkpoint_path: str) -> dict:
+    """Load search state from checkpoint file."""
+    if os.path.exists(checkpoint_path):
+        with open(checkpoint_path, 'rb') as f:
+            return pickle.load(f)
+    return None
+
+#-----------------------------------------------------------------------------
+# Visualizing functions
+#-----------------------------------------------------------------------------
+def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layout", config: dict = None, letters_to_display: str = None, keys_to_display: str = None) -> None:
+    """
+    Print a visual representation of the keyboard layout showing both mapped and assigned letters.
+    """
+    # Key mapping for special characters
+    key_mapping = {
+        ';': 'sc',  # semicolon
+        ',': 'cm',  # comma
+        '.': 'dt',  # dot/period
+        '/': 'sl'   # forward slash
+    }
+
+    # Ensure we have a config
+    if config is None:
+        raise ValueError("Configuration must be provided")
+        
+    # Create layout characters dictionary with empty spaces
+    layout_chars = {
+        'title': title,
+        'q': ' ', 'w': ' ', 'e': ' ', 'r': ' ',
+        'u': ' ', 'i': ' ', 'o': ' ', 'p': ' ',
+        'a': ' ', 's': ' ', 'd': ' ', 'f': ' ',
+        'j': ' ', 'k': ' ', 'l': ' ', 'sc': ' ',
+        'z': ' ', 'x': ' ', 'c': ' ', 'v': ' ',
+        'm': ' ', 'cm': ' ', 'dt': ' ', 'sl': ' '
+    }
+    
+    # First apply assigned letters from config
+    letters_assigned = config['optimization'].get('letters_assigned', '').lower()
+    keys_assigned = config['optimization'].get('keys_assigned', '').lower()
+    
+    if letters_assigned and keys_assigned:
+        for letter, key in zip(letters_assigned, keys_assigned):
+            converted_key = key_mapping.get(key.lower(), key.lower())
+            layout_chars[converted_key] = letter.lower()
+    
+    # Then mark positions to be filled from keys_to_assign
+    if not mapping:
+        keys_to_mark = config['optimization'].get('keys_to_assign', '').lower()
+        for key in keys_to_mark:
+            if key not in keys_assigned:  # Skip if already assigned
+                converted_key = key_mapping.get(key, key)
+                layout_chars[converted_key] = '-'
+    
+    # Fill in letters from letters_to_display and keys_to_display
+    if letters_to_display and keys_to_display:
+        if len(letters_to_display) != len(keys_to_display):
+            raise ValueError("letters_to_display and keys_to_display must have the same length")
+            
+        for letter, key in zip(letters_to_display, keys_to_display):
+            converted_key = key_mapping.get(key.lower(), key.lower())
+            layout_chars[converted_key] = letter.lower()
+    
+    # Fill in letters from mapping
+    if mapping:
+        for letter, key in mapping.items():
+            converted_key = key_mapping.get(key.lower(), key.lower())
+            current_char = layout_chars[converted_key]
+            
+            # If there's already an assigned letter, combine them
+            if current_char.strip() and current_char != '_':
+                # Put mapped letter (uppercase) first, then assigned letter (lowercase)
+                layout_chars[converted_key] = f"{letter.upper()}{current_char}"
+            else:
+                # Just show the mapped letter in uppercase
+                layout_chars[converted_key] = letter.upper()
+
+    # Get template from config and print
+    template = config['visualization']['keyboard_template']
+    print(template.format(**layout_chars))
+
+def calculate_total_nodes(
+    n_letters: int,
+    n_positions: int,
+    letters_to_constrain: set,
+    keys_to_constrain: set,
+    letters_assigned: set,
+    keys_assigned: set
+) -> dict:
+    """Calculate exact number of nodes for two-phase search."""
+    # Account for pre-assigned letters
+    available_positions = n_positions - len(keys_assigned)
+    remaining_letters = n_letters - len(letters_assigned)
+    
+    # Phase 1: Arrange constrained letters
+    n_constrained = len(letters_to_constrain)
+    n_constrained_positions = len(keys_to_constrain)
+    total_nodes_phase1 = perm(n_constrained_positions, n_constrained)
+    
+    # Phase 2: For each Phase 1 solution, arrange remaining letters
+    remaining_positions = available_positions - n_constrained
+    remaining_unconstrained = remaining_letters - n_constrained
+    nodes_per_phase1 = perm(remaining_positions, remaining_unconstrained)
+    total_nodes_phase2 = nodes_per_phase1 * total_nodes_phase1
+    
+    # Return theoretical maximum nodes (no pruning factor)
+    return {
+        'total_nodes': total_nodes_phase1 + total_nodes_phase2,
+        'phase1_arrangements': total_nodes_phase1,
+        'phase2_arrangements': total_nodes_phase2,
+        'details': {
+            'available_positions': available_positions,
+            'remaining_letters': remaining_letters,
+            'constrained_letters': n_constrained,
+            'constrained_positions': n_constrained_positions,
+            'arrangements_per_phase1': nodes_per_phase1
+        }
+    }
+
+def update_progress_bar(pbar, processed_nodes: int, start_time: float, total_nodes: int) -> None:
+    """Update progress bar showing progress against theoretical maximum."""
+    current_time = time.time()
+    elapsed = current_time - start_time
+    
+    if elapsed > 0:
+        nodes_per_second = processed_nodes / elapsed
+        # Always calculate against total theoretical nodes
+        remaining_nodes = total_nodes - processed_nodes
+        eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else float('inf')
+        
+        # Format as hours if more than 60 minutes
+        if eta_seconds > 3600:
+            eta_str = f"{eta_seconds/3600:.1f}h"
+        else:
+            eta_str = str(timedelta(seconds=int(eta_seconds)))
+            
+        pbar.set_postfix({
+            'Nodes/sec': f"{nodes_per_second:.0f}",
+            'Explored': f"{(processed_nodes/total_nodes)*100:.1f}%",
+            'Max ETA': eta_str,
+            'Memory': f"{psutil.Process().memory_info().rss / 1024**3:.1f}GB"
+        })
+
+def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
+                      config: dict,
+                      n: int = None,
+                      letters_to_display: str = None,
+                      keys_to_display: str = None) -> None:
+    """
+    Print the top N results with their scores and mappings.
+    
+    Args:
+        results: List of (score, mapping, detailed_scores) tuples
+        config: Configuration dictionary
+        n: Number of layouts to display (defaults to config['optimization']['nlayouts'])
+        letters_to_display: Letters that have already been assigned
+        keys_to_display: Keys that have already been assigned
+    """
+    if n is None:
+        n = config['optimization'].get('nlayouts', 5)
+    
+    print(f"\nTop {n} scoring layouts:")
+    for i, (score, mapping, detailed_scores) in enumerate(results[:n], 1):
+        print(f"\n#{i}: Score: {score:.4f}")
+        visualize_keyboard_layout(
+            mapping=mapping,
+            title=f"Layout #{i}", 
+            letters_to_display=letters_to_display,
+            keys_to_display=keys_to_display,
+            config=config
+        )
+        
+#-----------------------------------------------------------------------------
+# Optimizing functions (with numba)
+#-----------------------------------------------------------------------------
 @jit(nopython=True, fastmath=True)
 def calculate_layout_score(
     letter_indices: np.ndarray,
@@ -787,43 +812,6 @@ def calculate_layout_score(
     total_score = weighted_bigram + weighted_letter
     
     return float(total_score), float(letter_component), float(norm_bigram_component)
-
-def calculate_total_nodes(
-    n_letters: int,
-    n_positions: int,
-    letters_to_constrain: set,
-    keys_to_constrain: set,
-    letters_assigned: set,
-    keys_assigned: set
-) -> dict:
-    """Calculate exact number of nodes for two-phase search."""
-    # Account for pre-assigned letters
-    available_positions = n_positions - len(keys_assigned)
-    remaining_letters = n_letters - len(letters_assigned)
-    
-    # Phase 1: Arrange constrained letters
-    n_constrained = len(letters_to_constrain)
-    n_constrained_positions = len(keys_to_constrain)
-    total_nodes_phase1 = perm(n_constrained_positions, n_constrained)
-    
-    # Phase 2: For each Phase 1 solution, arrange remaining letters
-    remaining_positions = available_positions - n_constrained
-    remaining_unconstrained = remaining_letters - n_constrained
-    nodes_per_phase1 = perm(remaining_positions, remaining_unconstrained)
-    total_nodes_phase2 = nodes_per_phase1 * total_nodes_phase1
-    
-    return {
-        'total_nodes': total_nodes_phase1 + total_nodes_phase2,
-        'phase1_arrangements': total_nodes_phase1,
-        'phase2_arrangements': total_nodes_phase2,
-        'details': {
-            'available_positions': available_positions,
-            'remaining_letters': remaining_letters,
-            'constrained_letters': n_constrained,
-            'constrained_positions': n_constrained_positions,
-            'arrangements_per_phase1': nodes_per_phase1
-        }
-    }
 
 @jit(nopython=True, fastmath=True)
 def calculate_upper_bound(
@@ -1048,13 +1036,6 @@ def branch_and_bound_optimal(
     )
     initial_score = score_tuple[0]
     
-    # Initialize tracking variables
-    processed_nodes = 0
-    start_time = time.time()
-    last_update_time = start_time
-    last_checkpoint_time = start_time
-    update_interval = 5  # seconds
-    
     # Calculate phase nodes
     total_nodes_first_phase = perm(len(constrained_positions), len(constrained_letters))
     remaining_positions = n_keys_to_assign - len(constrained_letters)
@@ -1068,7 +1049,14 @@ def branch_and_bound_optimal(
     
     # Start search
     heapq.heappush(candidates, HeapItem(-initial_score, 0, initial_mapping, initial_used))
-    
+
+    # Track progress against total theoretical nodes
+    processed_nodes = 0
+    start_time = time.time()
+    last_update_time = start_time
+    last_checkpoint_time = start_time
+    update_interval = 5  # seconds
+
     #-------------------------------------------------------------------------
     # Phase 1
     #-------------------------------------------------------------------------
@@ -1146,7 +1134,7 @@ def branch_and_bound_optimal(
         initial_depth = sum(1 for i in range(n_letters_to_assign) if phase1_mapping[i] >= 0)
         
         candidates.append(HeapItem(-initial_score, initial_depth, phase1_mapping, phase1_used))
-    
+
     # Continue with phase 2 using existing branch and bound logic
     with tqdm(total=total_nodes_second_phase, desc="Phase 2", unit='nodes') as pbar:
         while candidates:
@@ -1174,6 +1162,8 @@ def branch_and_bound_optimal(
             # constantly updating it as better solutions are discovered.
             if depth == n_letters_to_assign:
                 if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
+                    processed_nodes += 1
+                    pbar.update(1)
                     continue  # Skip invalid solutions
                     
                 # 1. Calculate score for a given keyboard layout
@@ -1219,11 +1209,11 @@ def branch_and_bound_optimal(
                         # DEBUG
                         #print(f"\nNew solution found (score: {total_score:.4f})")
                         #print(f"Current best score: {-top_n_solutions[0][0]:.4f}")
-                
+            
                 processed_nodes += 1
                 pbar.update(1)
                 continue
-            
+
             #-----------------------------------------------------------------
             # PRUNING CHECK 1: 
             # Prune the current candidate before we even try expanding it to new positions
@@ -1288,24 +1278,11 @@ def branch_and_bound_optimal(
             # Update progress and save checkpoint if needed
             current_time = time.time()
             if current_time - last_update_time >= update_interval:
-                elapsed = current_time - start_time
-                if elapsed > 0:
-                    nodes_per_second = processed_nodes / elapsed
-                    
-                    # Calculate remaining time
-                    remaining_nodes = total_nodes_second_phase - processed_nodes
-                    eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else float('inf')
-                    
-                    pbar.set_postfix({
-                        'Nodes/sec': f"{nodes_per_second:.0f}",
-                        'ETA': str(timedelta(seconds=int(eta_seconds))),
-                        'Memory': f"{psutil.Process().memory_info().rss / 1024**3:.1f}GB"
-                    })
-                
+                update_progress_bar(pbar, processed_nodes, start_time, total_nodes_second_phase)
                 last_update_time = current_time
 
             # Save checkpoint if needed
-            if processed_nodes - last_checkpoint_time >= checkpoint_interval:
+            if processed_nodes - processed_nodes % checkpoint_interval >= last_checkpoint_time:
                 save_checkpoint(checkpoint_path, {
                     'candidates': candidates,
                     'top_n_solutions': top_n_solutions,
@@ -1313,7 +1290,13 @@ def branch_and_bound_optimal(
                     'start_time': start_time
                 })
                 last_checkpoint_time = processed_nodes
-    
+
+    # Print final statistics
+    end_time = time.time()
+    elapsed = end_time - start_time
+    percent_explored = (processed_nodes / total_nodes_second_phase) * 100
+    print(f"\nSearch completed: {percent_explored:.1f}% of theoretical space explored")
+
     # Convert solutions
     solutions = []
     print(f"\nConverting {len(top_n_solutions)} solutions...")

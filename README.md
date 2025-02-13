@@ -17,7 +17,8 @@ and corresponding key-pair and single-key typing comfort scores:
 
     letter_component = letter_frequency * key_comfort
 
-    score = (bigram_weight * bigram_component) + (letter_weight * letter_component)
+    score = (bigram_weight * bigram_component) + 
+            (letter_weight * letter_component)
 
 The typing comfort scores were estimated by a Bayesian learning method
 (https://github.com/binarybottle/bigram_typing_preferences_to_comfort_scores)
@@ -28,6 +29,14 @@ as part of the Bigram Typing Preference Study (https://github.com/binarybottle/b
 The main script optimizes keyboard layouts by jointly considering typing comfort 
 and letter/bigram frequencies. It uses a branch and bound algorithm to find optimal 
 letter placements while staying within memory constraints.
+
+When configuring a set of letters to optimally arrange within a set of keys,
+you can assign a subset of the letters to be constrained within a subset of the keys. 
+It would then run in two phases: 
+- Phase 1 finds all possible arrangements of the letters to be constrained, 
+  and sorts these according to the scoring criteria above.
+- Phase 2 optimally arranges the remaining letters within the remaining keys.
+If no constraints are specified, the code effectively runs in Phase 2 mode.
 
 Core Components:
 
@@ -70,6 +79,15 @@ Output:
 - Top N scoring layouts with:
   - Letter-to-key mappings
   - Total scores
-  - Component scores (letter and bigram)
-- Visual keyboard layout representations
-- Detailed CSV results
+  - Unweighted letter and bigram scores
+- Visual keyboard layout representations including:
+  - ASCII art visualization of the layout
+  - Clear marking of constrained positions
+- Detailed CSV results with:
+  - Configuration parameters
+  - Search space statistics
+  - Complete scoring breakdown
+- Progress updates during execution:
+  - Nodes processed per second
+  - Memory usage
+  - Estimated time remaining
