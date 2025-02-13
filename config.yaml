@@ -30,14 +30,23 @@ paths:
 #     in the 11 remaining home block keys.
 optimization:
 
-  letters_assigned: ""          # Letters already assigned to keys_assigned
-  keys_assigned:    ""          # Keys assigned letters_assigned
+  letters_assigned: "e"          # Letters already assigned to keys_assigned
+  keys_assigned:    "F"          # Keys assigned letters_assigned
 
-  letters_to_constrain: "et"  # Subset of letters_to_assign to arrange within keys_to_constrain
-  keys_to_constrain: "FDJK"   # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
+  letters_to_constrain: "taoi"  # Subset of letters_to_assign to arrange within keys_to_constrain
+  keys_to_constrain: "DJKEI"   # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
 
-  letters_to_assign: "etaoiunsrhldc"  # 13 Letters to arrange
-  keys_to_assign: "FDSVERAJKLMIU"     # 13 Keys to arrange letters_to_assign
+  letters_to_assign: "taoiunsrhldc"  # 13 Letters to arrange
+  keys_to_assign: "DSVERAJKLMIU"     # 13 Keys to arrange letters_to_assign
+
+#  letters_assigned: ""          # Letters already assigned to keys_assigned
+#  keys_assigned:    ""          # Keys assigned letters_assigned
+
+#  letters_to_constrain: "et"  # Subset of letters_to_assign to arrange within keys_to_constrain
+#  keys_to_constrain: "FDJK"   # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
+
+#  letters_to_assign: "etaoiunsrhldc"  # 13 Letters to arrange
+#  keys_to_assign: "FDSVERAJKLMIU"     # 13 Keys to arrange letters_to_assign
   scoring:  
     bigram_weight: 0.5  # Weight for bigram / 2-key score
     letter_weight: 0.5  # Weight for letter / 1-key score

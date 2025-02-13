@@ -712,20 +712,22 @@ def update_progress_bar(pbar, processed_nodes: int, start_time: float, total_nod
     
     if elapsed > 0:
         nodes_per_second = processed_nodes / elapsed
-        # Always calculate against total theoretical nodes
-        remaining_nodes = total_nodes - processed_nodes
-        eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else float('inf')
         
-        # Format as hours if more than 60 minutes
-        if eta_seconds > 3600:
-            eta_str = f"{eta_seconds/3600:.1f}h"
+        # Cap progress at 100%
+        percent_complete = min(100.0, (processed_nodes/total_nodes)*100)
+        
+        # Only show ETA if we haven't reached 100%
+        if percent_complete < 100:
+            remaining_nodes = total_nodes - processed_nodes
+            eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else float('inf')
+            eta_str = f"{eta_seconds/3600:.1f}h" if eta_seconds > 3600 else str(timedelta(seconds=int(eta_seconds)))
         else:
-            eta_str = str(timedelta(seconds=int(eta_seconds)))
+            eta_str = "Complete"
             
         pbar.set_postfix({
             'Nodes/sec': f"{nodes_per_second:.0f}",
-            'Explored': f"{(processed_nodes/total_nodes)*100:.1f}%",
-            'Max ETA': eta_str,
+            'Explored': f"{percent_complete:.1f}%",
+            'ETA': eta_str,
             'Memory': f"{psutil.Process().memory_info().rss / 1024**3:.1f}GB"
         })
 
@@ -1037,12 +1039,16 @@ def branch_and_bound_optimal(
     initial_score = score_tuple[0]
     
     # Calculate phase nodes
+    # Phase 1: All arrangements of letters_to_constrain in keys_to_constrain positions
     total_nodes_first_phase = perm(len(constrained_positions), len(constrained_letters))
-    remaining_positions = n_keys_to_assign - len(constrained_letters)
-    remaining_letters = n_letters_to_assign - len(constrained_letters) 
+
+    # Phase 2: For remaining letters_to_assign, arrange in remaining keys_to_assign positions
+    remaining_letters = n_letters_to_assign - len(constrained_letters) - len(letters_assigned)
+    remaining_positions = n_keys_to_assign - len(letters_assigned)
+    available_positions = remaining_positions - len(constrained_letters)
 
     # For second phase, need to account for all arrangements for each Phase 1 solution
-    total_nodes_second_phase = perm(remaining_positions, remaining_letters) * total_nodes_first_phase
+    total_nodes_second_phase = perm(available_positions, remaining_letters) * total_nodes_first_phase
 
     print(f"\nPhase 1 (Constrained letters): {total_nodes_first_phase:,} nodes")
     print(f"Phase 2 (Remaining letters): {total_nodes_second_phase:,} nodes")
@@ -1161,9 +1167,9 @@ def branch_and_bound_optimal(
             # Maintains a priority queue of the best n keyboard layouts found so far, 
             # constantly updating it as better solutions are discovered.
             if depth == n_letters_to_assign:
+                processed_nodes += 1
+                pbar.update(1)
                 if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
-                    processed_nodes += 1
-                    pbar.update(1)
                     continue  # Skip invalid solutions
                     
                 # 1. Calculate score for a given keyboard layout
@@ -1204,14 +1210,8 @@ def branch_and_bound_optimal(
                         heapq.heappop(top_n_solutions)
                     
                     # Update the worst score for future comparisons
-                    if top_n_solutions:
-                        worst_top_n_score = -top_n_solutions[0][0]
-                        # DEBUG
-                        #print(f"\nNew solution found (score: {total_score:.4f})")
-                        #print(f"Current best score: {-top_n_solutions[0][0]:.4f}")
-            
-                processed_nodes += 1
-                pbar.update(1)
+                    worst_top_n_score = -top_n_solutions[0][0]
+ 
                 continue
 
             #-----------------------------------------------------------------
@@ -1228,15 +1228,13 @@ def branch_and_bound_optimal(
                 margin = 1e-8 * abs(worst_top_n_score)  # Relative margin for precision error
 
                 if upper_bound < worst_top_n_score - margin:
-                    processed_nodes += 1
-                    pbar.update(1)
                     continue
-
-            # Try each available position
-            nodes_at_depth = 0
 
             # In phase 2, just use any unassigned position
             valid_positions = [pos for pos in range(n_keys_to_assign) if not used[pos]]
+            nodes_at_depth = len(valid_positions)  # This is how many nodes we're actually adding at this depth
+            processed_nodes += nodes_at_depth
+            pbar.update(nodes_at_depth)
             
             for pos in valid_positions:
                 # Create new state
@@ -1269,11 +1267,6 @@ def branch_and_bound_optimal(
                         candidates,
                         HeapItem(-new_score, depth + 1, new_mapping, new_used)
                     )
-                                    
-                nodes_at_depth += 1
-            
-            processed_nodes += nodes_at_depth
-            pbar.update(nodes_at_depth)
             
             # Update progress and save checkpoint if needed
             current_time = time.time()
