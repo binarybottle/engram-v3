@@ -493,9 +493,9 @@ def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidate
     # Assume we'll only explore about 1% of the theoretical space due to pruning
     estimated_search_space = total_arrangements // 100
     
-    # Use more realistic nodes per second based on actual performance
-    estimated_nodes_per_sec = 100000  # Based on observed performance
-    estimated_seconds = estimated_search_space / estimated_nodes_per_sec
+    # Use more realistic perms per second based on actual performance
+    estimated_perms_per_sec = 100000  # Based on observed performance
+    estimated_seconds = estimated_search_space / estimated_perms_per_sec
     estimated_runtime = str(timedelta(seconds=int(estimated_seconds)))
     
     return {
@@ -508,7 +508,7 @@ def estimate_memory_requirements(n_letters: int, n_positions: int, max_candidate
         'search_space_details': {
             'theoretical_arrangements': total_arrangements,
             'estimated_search_space': estimated_search_space,
-            'nodes_per_second': estimated_nodes_per_sec
+            'perms_per_second': estimated_perms_per_sec
         }
     }
 
@@ -519,26 +519,26 @@ def setup_checkpointing(config: dict, search_space: dict) -> dict:
     Returns:
         dict with checkpoint settings:
         - enabled: bool, whether checkpointing is enabled
-        - interval: int, nodes between checkpoints
+        - interval: int, perms between checkpoints
         - path: str, checkpoint file path
         - metadata: dict, search configuration data
     """
     # Estimate if checkpointing is needed based on search space size
-    LONG_SEARCH_THRESHOLD = 1e9  # 1 billion nodes
-    VERY_LONG_SEARCH_THRESHOLD = 1e12  # 1 trillion nodes
+    LONG_SEARCH_THRESHOLD = 1e9  # 1 billion perms
+    VERY_LONG_SEARCH_THRESHOLD = 1e12  # 1 trillion perms
     
-    total_nodes = search_space['total_nodes']
-    estimated_nodes_per_second = 100000  # Conservative estimate
-    estimated_runtime = total_nodes / estimated_nodes_per_second
+    total_perms = search_space['total_perms']
+    estimated_perms_per_second = 100000  # Conservative estimate
+    estimated_runtime = total_perms / estimated_perms_per_second
     
     # Determine if we need checkpointing
-    checkpointing_enabled = total_nodes > LONG_SEARCH_THRESHOLD
+    checkpointing_enabled = total_perms > LONG_SEARCH_THRESHOLD
     
     if not checkpointing_enabled:
         return {'enabled': False}
     
     # Calculate checkpoint interval based on search size
-    if total_nodes > VERY_LONG_SEARCH_THRESHOLD:
+    if total_perms > VERY_LONG_SEARCH_THRESHOLD:
         checkpoint_interval = 1000000  # Every million nodes for very long searches
     else:
         checkpoint_interval = 100000   # Every 100k nodes for long searches
@@ -565,7 +565,7 @@ def setup_checkpointing(config: dict, search_space: dict) -> dict:
         'search_space': search_space,
         'timestamp_start': timestamp,
         'estimated_runtime': str(timedelta(seconds=int(estimated_runtime))),
-        'total_nodes': total_nodes
+        'total_perms': total_perms
     }
     
     return {
@@ -667,7 +667,7 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
     template = config['visualization']['keyboard_template']
     print(template.format(**layout_chars))
 
-def calculate_total_nodes(
+def calculate_total_perms(
     n_letters: int,
     n_positions: int,
     letters_to_constrain: set,
@@ -675,7 +675,7 @@ def calculate_total_nodes(
     letters_assigned: set,
     keys_assigned: set
 ) -> dict:
-    """Calculate exact number of nodes for two-phase search."""
+    """Calculate exact number of perms for two-phase search."""
     # Account for pre-assigned letters
     available_positions = n_positions - len(keys_assigned)
     remaining_letters = n_letters - len(letters_assigned)
@@ -683,52 +683,38 @@ def calculate_total_nodes(
     # Phase 1: Arrange constrained letters
     n_constrained = len(letters_to_constrain)
     n_constrained_positions = len(keys_to_constrain)
-    total_nodes_phase1 = perm(n_constrained_positions, n_constrained)
+    total_perms_phase1 = perm(n_constrained_positions, n_constrained)
     
     # Phase 2: For each Phase 1 solution, arrange remaining letters
     remaining_positions = available_positions - n_constrained
     remaining_unconstrained = remaining_letters - n_constrained
-    nodes_per_phase1 = perm(remaining_positions, remaining_unconstrained)
-    total_nodes_phase2 = nodes_per_phase1 * total_nodes_phase1
+    perms_per_phase1 = perm(remaining_positions, remaining_unconstrained)
+    total_perms_phase2 = perms_per_phase1 * total_perms_phase1
     
-    # Return theoretical maximum nodes (no pruning factor)
+    # Return theoretical maximum perms (no pruning factor)
     return {
-        'total_nodes': total_nodes_phase1 + total_nodes_phase2,
-        'phase1_arrangements': total_nodes_phase1,
-        'phase2_arrangements': total_nodes_phase2,
+        'total_perms': total_perms_phase1 + total_perms_phase2,
+        'phase1_arrangements': total_perms_phase1,
+        'phase2_arrangements': total_perms_phase2,
         'details': {
             'available_positions': available_positions,
             'remaining_letters': remaining_letters,
             'constrained_letters': n_constrained,
             'constrained_positions': n_constrained_positions,
-            'arrangements_per_phase1': nodes_per_phase1
+            'arrangements_per_phase1': perms_per_phase1
         }
     }
 
-def update_progress_bar(pbar, processed_nodes: int, start_time: float, total_nodes: int) -> None:
-    """Update progress bar showing progress against theoretical maximum."""
+def update_progress_bar(pbar, processed_perms: int, start_time: float, total_perms: int) -> None:
     current_time = time.time()
-    elapsed = current_time - start_time
-    
+    elapsed = current_time - start_time   
     if elapsed > 0:
-        nodes_per_second = processed_nodes / elapsed
-        
-        # Cap progress at 100%
-        percent_complete = min(100.0, (processed_nodes/total_nodes)*100)
-        
-        # Only show ETA if we haven't reached 100%
-        if percent_complete < 100:
-            remaining_nodes = total_nodes - processed_nodes
-            eta_seconds = remaining_nodes / nodes_per_second if nodes_per_second > 0 else float('inf')
-            eta_str = f"{eta_seconds/3600:.1f}h" if eta_seconds > 3600 else str(timedelta(seconds=int(eta_seconds)))
-        else:
-            eta_str = "Complete"
-            
+        perms_per_second = processed_perms / elapsed  
         pbar.set_postfix({
-            'Nodes/sec': f"{nodes_per_second:.0f}",
-            'Explored': f"{percent_complete:.1f}%",
-            'ETA': eta_str,
-            'Memory': f"{psutil.Process().memory_info().rss / 1024**3:.1f}GB"
+            'Perms/sec': f"{perms_per_second:.0f}",
+            'Explored': f"{(processed_perms/total_perms)*100:.1f}%",
+            'ETA': 'Complete' if processed_perms >= total_perms else f"{((total_perms-processed_perms)/perms_per_second)/60:.1f}m",
+            'Memory': f"{psutil.Process().memory_info().rss/1e9:.1f}GB"
         })
 
 def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]]], 
@@ -989,11 +975,6 @@ def branch_and_bound_optimal(
     constrained_letter_indices = set(i for i, letter in enumerate(letters_to_assign) 
                                    if letter in constrained_letters)
     
-    # DEBUG
-    #print("\nConstraint tracking:")
-    #print(f"Constrained letters at indices: {sorted(constrained_letter_indices)}")
-    #print(f"Constrained positions: {sorted(constrained_positions)}")
-    
     # Set up checkpointing
     checkpoint_dir = "checkpoints"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -1038,26 +1019,26 @@ def branch_and_bound_optimal(
     )
     initial_score = score_tuple[0]
     
-    # Calculate phase nodes
+    # Calculate phase perms
     # Phase 1: All arrangements of letters_to_constrain in keys_to_constrain positions
-    total_nodes_first_phase = perm(len(constrained_positions), len(constrained_letters))
+    total_perms_phase1 = perm(len(constrained_positions), len(constrained_letters))
 
     # Phase 2: For remaining letters_to_assign, arrange in remaining keys_to_assign positions
-    remaining_letters = n_letters_to_assign - len(constrained_letters) - len(letters_assigned)
-    remaining_positions = n_keys_to_assign - len(letters_assigned)
-    available_positions = remaining_positions - len(constrained_letters)
+    phase2_remaining_letters = n_letters_to_assign - len(constrained_letters) - len(letters_assigned)
+    phase2_available_positions = n_keys_to_assign - len(constrained_letters) - len(letters_assigned)
 
     # For second phase, need to account for all arrangements for each Phase 1 solution
-    total_nodes_second_phase = perm(available_positions, remaining_letters) * total_nodes_first_phase
+    perms_per_phase1_solution = perm(phase2_available_positions, phase2_remaining_letters)
+    total_perms_phase2 = perms_per_phase1_solution * total_perms_phase1
 
-    print(f"\nPhase 1 (Constrained letters): {total_nodes_first_phase:,} nodes")
-    print(f"Phase 2 (Remaining letters): {total_nodes_second_phase:,} nodes")
+    print(f"\nPhase 1 (Constrained letters): {total_perms_phase1:,} permutations")
+    print(f"Phase 2 (Remaining letters): {total_perms_phase2:,} permutations")
     
     # Start search
     heapq.heappush(candidates, HeapItem(-initial_score, 0, initial_mapping, initial_used))
 
-    # Track progress against total theoretical nodes
-    processed_nodes = 0
+    # Track progress against total theoretical perms
+    processed_perms = 0
     start_time = time.time()
     last_update_time = start_time
     last_checkpoint_time = start_time
@@ -1077,7 +1058,7 @@ def branch_and_bound_optimal(
     phase1_candidates = [HeapItem(-initial_score, 0, initial_mapping, initial_used)]
     
     print("\nPhase 1: Arranging constrained letters...")
-    with tqdm(total=total_nodes_first_phase, desc="Phase 1", unit='nodes') as pbar:
+    with tqdm(total=total_perms_phase1, desc="Phase 1", unit='perms') as pbar:
         while phase1_candidates:
             candidate = heapq.heappop(phase1_candidates)
             depth = candidate.depth
@@ -1087,6 +1068,7 @@ def branch_and_bound_optimal(
             # Found a valid phase 1 arrangement
             if all(mapping[i] >= 0 for i in constrained_letter_indices):
                 phase1_solutions.append((mapping.copy(), used.copy()))
+                pbar.update(1)
                 continue
                 
             # Try next constrained letter
@@ -1105,9 +1087,7 @@ def branch_and_bound_optimal(
                     new_used[pos] = True
                     
                     phase1_candidates.append(HeapItem(0, depth + 1, new_mapping, new_used))
-            
-            pbar.update(1)
-    
+                
     print(f"\nFound {len(phase1_solutions)} valid phase 1 arrangements")
     
     #-------------------------------------------------------------------------
@@ -1122,8 +1102,21 @@ def branch_and_bound_optimal(
     print("\nPhase 2: Arranging remaining letters...")
     candidates = []
     
+    # Calculate permutations per Phase 1 solution
+    perms_per_phase1_solution = perm(phase2_available_positions, phase2_remaining_letters)
+    total_perms_phase2 = perms_per_phase1_solution * total_perms_phase1
+
+    # Track progress properly
+    current_phase1_solution_index = 0
+    perms_in_current_solution = 0
+    processed_perms = 0
+
     # Initialize phase 2 with all phase 1 solutions
     for phase1_mapping, phase1_used in phase1_solutions:
+        # Reset for new Phase 1 solution
+        perms_in_current_solution = 0
+        candidates = []  # Clear candidates for new Phase 1 solution
+        
         # Calculate initial score for this arrangement
         score_tuple = calculate_layout_score(
             phase1_mapping,
@@ -1141,17 +1134,16 @@ def branch_and_bound_optimal(
         
         candidates.append(HeapItem(-initial_score, initial_depth, phase1_mapping, phase1_used))
 
-    # Continue with phase 2 using existing branch and bound logic
-    with tqdm(total=total_nodes_second_phase, desc="Phase 2", unit='nodes') as pbar:
+    # Process this Phase 1 solution
+    with tqdm(total=total_perms_phase2, desc="Phase 2", unit='perms') as pbar:
         while candidates:
-
             # Memory check
             if psutil.virtual_memory().percent > memory_threshold_gb * 100:
                 print("\nWarning: Memory usage high, saving checkpoint and stopping")
                 save_checkpoint(checkpoint_path, {
                     'candidates': candidates,
                     'top_n_solutions': top_n_solutions,
-                    'processed_nodes': processed_nodes,
+                    'processed_perms': processed_perms,
                     'start_time': start_time
                 })
                 break
@@ -1167,12 +1159,14 @@ def branch_and_bound_optimal(
             # Maintains a priority queue of the best n keyboard layouts found so far, 
             # constantly updating it as better solutions are discovered.
             if depth == n_letters_to_assign:
-                processed_nodes += 1
-                pbar.update(1)
                 if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
                     continue  # Skip invalid solutions
-                    
-                # 1. Calculate score for a given keyboard layout
+
+                perms_in_current_solution += 1
+                processed_perms = (current_phase1_solution_index * perms_per_phase1_solution) + perms_in_current_solution
+                pbar.update(1)
+                
+                # Calculate score for this layout
                 score_tuple = calculate_layout_score(
                     mapping,
                     key_LR,
@@ -1268,24 +1262,30 @@ def branch_and_bound_optimal(
             # Update progress and save checkpoint if needed
             current_time = time.time()
             if current_time - last_update_time >= update_interval:
-                update_progress_bar(pbar, processed_nodes, start_time, total_nodes_second_phase)
+                update_progress_bar(pbar, processed_perms, start_time, total_perms_phase2)
                 last_update_time = current_time
 
             # Save checkpoint if needed
-            if processed_nodes - processed_nodes % checkpoint_interval >= last_checkpoint_time:
+            if processed_perms - processed_perms % checkpoint_interval >= last_checkpoint_time:
                 save_checkpoint(checkpoint_path, {
                     'candidates': candidates,
                     'top_n_solutions': top_n_solutions,
-                    'processed_nodes': processed_nodes,
+                    'processed_perms': processed_perms,
                     'start_time': start_time
                 })
-                last_checkpoint_time = processed_nodes
+                last_checkpoint_time = processed_perms
+
+    # Move to next Phase 1 solution
+    current_phase1_solution_index += 1
 
     # Print final statistics
     end_time = time.time()
     elapsed = end_time - start_time
-    percent_explored = (processed_nodes / total_nodes_second_phase) * 100
-    print(f"\nSearch completed: {percent_explored:.1f}% of theoretical space explored")
+    print(f"\nFinal Phase 2 permutation count summary:")
+    print(f"  Total theoretical permutations: {total_perms_phase2}")
+    print(f"  Total processed permutations: {processed_perms} ({processed_perms/total_perms_phase2:.2f}x theoretical)")
+    percent_explored = (processed_perms / total_perms_phase2) * 100
+    print(f"\nSearch completed: {percent_explored:.1f}% of theoretical space explored in {elapsed:.1f} seconds")
 
     # Convert solutions
     solutions = []
@@ -1332,7 +1332,7 @@ def optimize_layout(config: dict) -> None:
     validate_optimization_inputs(config)
     
     # Calculate exact search space size
-    search_space = calculate_total_nodes(
+    search_space = calculate_total_perms(
         n_letters=len(letters_to_assign),
         n_positions=len(keys_to_assign),
         letters_to_constrain=set(letters_to_constrain),
@@ -1340,13 +1340,17 @@ def optimize_layout(config: dict) -> None:
         letters_assigned=set(letters_assigned),
         keys_assigned=set(keys_assigned)
     )
+
+    # Calculate phase perms
+    total_perms_phase1 = perm(len(keys_to_constrain), len(letters_to_constrain))
+    # For second phase, account for all arrangements for each Phase 1 solution
+    phase2_available_positions = len(keys_to_assign) - len(keys_to_constrain)
+    phase2_remaining_letters =  len(letters_to_assign) - len(letters_to_constrain)
+    total_perms_phase2 = perm(phase2_available_positions, phase2_remaining_letters) * total_perms_phase1
+    #total_perms = total_perms_phase1 + total_perms_phase2
     print("\nSearch space analysis:")
-    print(f"Phase 1 (Constrained letters):")
-    print(f"  - {search_space['phase1_arrangements']:,} nodes")
-    print(f"Phase 2 (Remaining letters):")
-    print(f"  - {search_space['phase2_arrangements']:,} total nodes")
-    print(f"  - {search_space['details']['arrangements_per_phase1']:,} arrangements per Phase 1 solution")
-    print(f"\nTotal nodes to explore: {search_space['total_nodes']:,}")
+    print(f"Phase 1 (constrained letters): {total_perms_phase1:,} permutations")
+    print(f"Phase 2 (remaining letters): {total_perms_phase2:,} permutations")
 
     # Show initial keyboard
     visualize_keyboard_layout(
