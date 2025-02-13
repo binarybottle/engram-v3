@@ -16,37 +16,28 @@ paths:
 #-----------------------------------------------------------------------
 # Left home block of 12 keys in descending comfort order: FDSVERAWCQXZ
 # Letters in descending frequency: etaoinsrhldcumfpgwybvkxjqz
-# Vowels/consonants: eaoiu / tnsrhld cmfpgwybvkxj [qz]
+# Vowels/consonants: eaoiu / tnsrhldc mfpgwybvkxj [qz]
 # Most comfortable keys (left/right): FDSVERAW / JKLMIU;O
 # Goal: Optimally arrange the 24 most frequent letters (not q or z)
 #       in the 24 home block keys.
-# (1) Assign E and T (most common letters) to the most comfortable keys.
-# (2) Arrange 5 vowels in the 6 most comfortable keys on the left side of the keyboard
-#      .
-
-# (2) Arrange 8 consonants (with > median frequency "u") 
-#     within the remaining keys of the 16 most comfortable keys.
+# (1) Constrain E and T (most common letters) to the 4 most comfortable keys.
+# (2) Optimally arrange the top 13 letters (with > median frequency "u") 
+#     within the 13 most comfortable keys.
 # (3) Optimally arrange the 11 remaining letters (not q or z)
 #     in the 11 remaining home block keys.
+# (4) Optimally arrange q and z in the two least comfortable keys.
+
 optimization:
 
-  letters_assigned: "e"          # Letters already assigned to keys_assigned
-  keys_assigned:    "F"          # Keys assigned letters_assigned
+  letters_assigned: ""          # Letters already assigned to keys_assigned
+  keys_assigned:    ""          # Keys assigned letters_assigned
 
-  letters_to_constrain: "taoi"  # Subset of letters_to_assign to arrange within keys_to_constrain
-  keys_to_constrain: "DJKEI"   # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
+  letters_to_constrain: "et"    # Subset of letters_to_assign to arrange within keys_to_constrain
+  keys_to_constrain: "FDJK"     # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
 
-  letters_to_assign: "taoiunsrhldc"  # 13 Letters to arrange
-  keys_to_assign: "DSVERAJKLMIU"     # 13 Keys to arrange letters_to_assign
+  letters_to_assign: "etaoinsrhldcu"  # 13 Letters to arrange
+  keys_to_assign: "FDSVERAJKLMIU;"    # 13 Keys to arrange letters_to_assign
 
-#  letters_assigned: ""          # Letters already assigned to keys_assigned
-#  keys_assigned:    ""          # Keys assigned letters_assigned
-
-#  letters_to_constrain: "et"  # Subset of letters_to_assign to arrange within keys_to_constrain
-#  keys_to_constrain: "FDJK"   # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
-
-#  letters_to_assign: "etaoiunsrhldc"  # 13 Letters to arrange
-#  keys_to_assign: "FDSVERAJKLMIU"     # 13 Keys to arrange letters_to_assign
   scoring:  
     bigram_weight: 0.5  # Weight for bigram / 2-key score
     letter_weight: 0.5  # Weight for letter / 1-key score
