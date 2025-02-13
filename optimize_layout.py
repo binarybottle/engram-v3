@@ -54,13 +54,13 @@ def load_config(config_path: str = "config.yaml") -> dict:
                     k.lower() for k in config['layout']['positions'][side][row]
                 ]
     
-    # Normalize strings to lowercase
+    # Normalize strings to lowercase with consistent access pattern
     optimization = config['optimization']
-    for key in ['letters', 'keys', 
-                'letters_to_display', 'keys_to_display',
-                'letters_to_constrain', 'keys_to_constrain']:
-        if key in optimization:
-            optimization[key] = optimization[key].lower()
+    for key in ['letters_to_assign', 'keys_to_assign', 
+                'letters_to_constrain', 'keys_to_constrain',
+                'letters_assigned', 'keys_assigned']:
+        # Use get() with empty string default for all keys
+        optimization[key] = optimization.get(key, '').lower()
     
     # Normalize right_to_left mappings
     right_to_left = config['layout']['position_mappings']['right_to_left']
@@ -299,25 +299,39 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
                         config: dict,
                         output_path: str = "layout_results.csv") -> None:
     """
-    Save layout results to a CSV file.
+    Save layout results to a CSV file with proper escaping of special characters.
     """
-    # Generate timestamp and set output file
+    # Generate timestamp and set output path
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = os.path.join(config['paths']['output']['layout_results_folder'], 
                               f"layout_results_{timestamp}.csv")
     
+    def escape_special_chars(text: str) -> str:
+        """Helper function to escape special characters and ensure proper CSV formatting."""
+        # Replace semicolons with their character names to prevent CSV splitting
+        replacements = {
+            ';': '[semicolon]',
+            ',': '[comma]',
+            '.': '[period]',
+            '/': '[slash]'
+        }
+        for char, replacement in replacements.items():
+            text = text.replace(char, replacement)
+        return text
+    
     with open(output_path, 'w', newline='') as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, quoting=csv.QUOTE_ALL)  # Quote all fields
         
         # Write header with configuration info
-        writer.writerow(['Letters to assign', config['optimization']['letters_to_assign']])
-        writer.writerow(['Available keys', config['optimization']['keys_to_assign']])
-        writer.writerow(['Letters to constrain', config['optimization']['letters_to_constrain']])
-        writer.writerow(['Constraint keys', config['optimization']['keys_to_constrain']])
-        writer.writerow(['Assigned letters', config['optimization']['letters_assigned']])
-        writer.writerow(['Assigned keys', config['optimization']['keys_assigned']])
-        writer.writerow(['Bigram weight', config['optimization']['scoring']['bigram_weight']])
-        writer.writerow(['Letter weight', config['optimization']['scoring']['letter_weight']])
+        opt = config['optimization']
+        writer.writerow(['Letters to assign', escape_special_chars(opt.get('letters_to_assign', ''))])
+        writer.writerow(['Available keys', escape_special_chars(opt.get('keys_to_assign', ''))])
+        writer.writerow(['Letters to constrain', escape_special_chars(opt.get('letters_to_constrain', ''))])
+        writer.writerow(['Constraint keys', escape_special_chars(opt.get('keys_to_constrain', ''))])
+        writer.writerow(['Assigned letters', escape_special_chars(opt.get('letters_assigned', ''))])
+        writer.writerow(['Assigned keys', escape_special_chars(opt.get('keys_assigned', ''))])
+        writer.writerow(['Bigram weight', opt['scoring']['bigram_weight']])
+        writer.writerow(['Letter weight', opt['scoring']['letter_weight']])
         writer.writerow([])  # Empty row for separation
         
         # Write results header
@@ -328,41 +342,17 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
             'Total score',
             'Bigram score (unweighted)',
             'Letter score (unweighted)'
-            #'Avg 2-key comfort',
-            #'Avg 2-gram frequency',
-            #'Avg 1-key comfort',
-            #'Avg 1-gram frequency'
         ])
         
         # Write results
         for rank, (score, mapping, detailed_scores) in enumerate(results, 1):
-            arrangement = "".join(mapping.keys())
-            positions = "".join(mapping.values())
-           
-            # Get first bigram score and letter score (they're the same for all entries)
+            arrangement = escape_special_chars("".join(mapping.keys()))
+            positions = escape_special_chars("".join(mapping.values()))
+            
+            # Get first bigram score and letter score
             first_entry = next(iter(detailed_scores.values()))
             unweighted_bigram_score = first_entry['unweighted_bigram_score']
             unweighted_letter_score = first_entry['unweighted_letter_score']
-
-            # Component scores
-            """
-            comfort_scores1 = [d['components']['comfort_seq1'] for d in detailed_scores.values()]
-            comfort_scores2 = [d['components']['comfort_seq2'] for d in detailed_scores.values()]
-            avg_2key_comfort_score1 = np.mean(comfort_scores1)
-            avg_2key_comfort_score2 = np.mean(comfort_scores2)
-            avg_2key_comfort_score = (avg_2key_comfort_score1 + avg_2key_comfort_score2) / 2
-
-            freq_scores1 = [d['components']['freq_seq1'] for d in detailed_scores.values()]
-            freq_scores2 = [d['components']['freq_seq2'] for d in detailed_scores.values()]
-            avg_2gram_freq_score1 = np.mean(freq_scores1)
-            avg_2gram_freq_score2 = np.mean(freq_scores2)
-            avg_2gram_freq_score = (avg_2gram_freq_score1 + avg_2gram_freq_score2) / 2
-
-            comfort_scores = [d['components']['avg_comfort'] for d in detailed_scores.values()]
-            freq_scores = [d['components']['avg_freq'] for d in detailed_scores.values()]
-            avg_1key_comfort_score = np.mean(comfort_scores)
-            avg_1gram_freq_score = np.mean(freq_scores)
-            """
 
             writer.writerow([
                 arrangement,
@@ -371,10 +361,6 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
                 f"{score:.4f}",
                 f"{unweighted_bigram_score:.4f}",
                 f"{unweighted_letter_score:.4f}"
-                #f"{avg_2key_comfort_score:.4f}",
-                #f"{avg_2gram_freq_score:.4f}",
-                #f"{avg_1key_comfort_score:.4f}",
-                #f"{avg_1gram_freq_score:.4f}"
             ])
     
     print(f"\nResults saved to: {output_path}")
@@ -675,45 +661,59 @@ def calculate_total_perms(
     letters_assigned: set,
     keys_assigned: set
 ) -> dict:
-    """Calculate exact number of perms for two-phase search."""
-    # Account for pre-assigned letters
-    available_positions = n_positions - len(keys_assigned)
-    remaining_letters = n_letters - len(letters_assigned)
+    """
+    Calculate exact number of perms for two-phase search.
     
-    # Phase 1: Arrange constrained letters
-    n_constrained = len(letters_to_constrain)
+    Phase 1: Arrange constrained letters within constrained positions
+    Phase 2: For each Phase 1 solution, arrange remaining letters in remaining positions
+    """
+    # Phase 1: Arrange constrained letters in constrained positions
+    n_constrained_letters = len(letters_to_constrain)
     n_constrained_positions = len(keys_to_constrain)
-    total_perms_phase1 = perm(n_constrained_positions, n_constrained)
+    
+    if n_constrained_letters == 0 or n_constrained_positions == 0:
+        # No constraints - everything happens in Phase 2
+        total_perms_phase1 = 1
+        remaining_letters = n_letters - len(letters_assigned)
+        remaining_positions = n_positions - len(keys_assigned)
+    else:
+        # Calculate Phase 1 permutations
+        total_perms_phase1 = perm(n_constrained_positions, n_constrained_letters)
+        # After Phase 1, we have used n_constrained_letters positions
+        remaining_letters = n_letters - n_constrained_letters - len(letters_assigned)
+        remaining_positions = n_positions - n_constrained_letters - len(keys_assigned)
     
     # Phase 2: For each Phase 1 solution, arrange remaining letters
-    remaining_positions = available_positions - n_constrained
-    remaining_unconstrained = remaining_letters - n_constrained
-    perms_per_phase1 = perm(remaining_positions, remaining_unconstrained)
+    perms_per_phase1 = perm(remaining_positions, remaining_letters)
     total_perms_phase2 = perms_per_phase1 * total_perms_phase1
     
-    # Return theoretical maximum perms (no pruning factor)
     return {
-        'total_perms': total_perms_phase1 + total_perms_phase2,
+        'total_perms': total_perms_phase2,  # Total perms is just Phase 2 total
         'phase1_arrangements': total_perms_phase1,
         'phase2_arrangements': total_perms_phase2,
         'details': {
-            'available_positions': available_positions,
+            'remaining_positions': remaining_positions,
             'remaining_letters': remaining_letters,
-            'constrained_letters': n_constrained,
+            'constrained_letters': n_constrained_letters,
             'constrained_positions': n_constrained_positions,
             'arrangements_per_phase1': perms_per_phase1
         }
     }
 
 def update_progress_bar(pbar, processed_perms: int, start_time: float, total_perms: int) -> None:
+    """Update progress bar with accurate statistics."""
     current_time = time.time()
     elapsed = current_time - start_time   
     if elapsed > 0:
-        perms_per_second = processed_perms / elapsed  
+        perms_per_second = processed_perms / elapsed
+        percent_explored = (processed_perms / total_perms) * 100 if total_perms > 0 else 0
+        remaining_perms = total_perms - processed_perms
+        eta_minutes = (remaining_perms / perms_per_second) / 60 if perms_per_second > 0 else 0
+        
         pbar.set_postfix({
-            'Perms/sec': f"{perms_per_second:.0f}",
-            'Explored': f"{(processed_perms/total_perms)*100:.1f}%",
-            'ETA': 'Complete' if processed_perms >= total_perms else f"{((total_perms-processed_perms)/perms_per_second)/60:.1f}m",
+            'Perms/sec': f"{perms_per_second:,.0f}",
+            'Explored': f"{percent_explored:.1f}%",
+            'ETA': 'Complete' if processed_perms >= total_perms else f"{eta_minutes:.1f}m",
             'Memory': f"{psutil.Process().memory_info().rss/1e9:.1f}GB"
         })
 
@@ -857,58 +857,133 @@ def calculate_upper_bound(
     #-------------------------------------------------------------------------
     # Maximum unweighted bigram component
     #-------------------------------------------------------------------------
-    # Check if all remaining positions are on same hand
-    all_left = True
-    all_right = True
-    for pos in available_positions:
-        if key_LR[pos] == 1:  # Right hand
-            all_left = False
-        else:  # Left hand
-            all_right = False
-        if not all_left and not all_right:
-            break
+    use_max_possible_upper_bound = False
+    if use_max_possible_upper_bound:
 
-    # Set maximum comfort based on available positions
-    if all_left or all_right:
-        max_comfort = np.max(comfort_matrix)  # Maximum possible comfort value for same-hand bigrams
+        # Overly optimistic (maximum possible) upper bound calculation 
+        #-------------------------------------------------------------
+        # Set maximum comfort based on available positions
+        # Check if all remaining positions are on same hand
+        all_left = True
+        all_right = True
+        for pos in available_positions:
+            if key_LR[pos] == 1:  # Right hand
+                all_left = False
+            else:  # Left hand
+                all_right = False
+            if not all_left and not all_right:
+                break
+
+        if all_left or all_right:
+            max_comfort = np.max(comfort_matrix)  # Maximum possible comfort value for same-hand bigrams
+        else:
+            max_comfort = 1.0  # Maximum possible comfort value, since positions on both hands available
+            
+        # Set maximum bigram frequency possible between:
+        #  - Already assigned letters and unassigned letters
+        #  - Unassigned constrained letters with other unassigned letters
+        #  - Unassigned unconstrained letters with other unassigned letters
+        #
+        # Get max frequency for any bigram involving at least one unassigned letter
+        max_bigram_freq = 0.0
+        # Check assigned -> unassigned and vice versa
+        for i in assigned:
+            max_bigram_freq = max(max_bigram_freq, np.max(bigram_freqs[i, unassigned]))
+            max_bigram_freq = max(max_bigram_freq, np.max(bigram_freqs[unassigned, i]))
+        # Check unassigned -> unassigned
+        for i in unassigned:
+            for j in unassigned:
+                if i != j:
+                    max_bigram_freq = max(max_bigram_freq, bigram_freqs[i, j])
+
+        # From calculate_layout_score:
+        #   bigram_component += (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
+        #   weighted_bigram = bigram_component * bigram_weight / 2.0
+        #
+        # If we have x unassigned letters (n_remaining_letters)
+        # They can form 2x pairs with each assigned letter "a" (both directions)
+        # And x(x-1) pairs with other unassigned letters (both directions)
+        # For a total of: x(x-1) + 2ax pairs
+        #   = x(2a + x -1), where a = n_total_letters - x)
+        #   = x(2 * n_total_letters - x - 1) 
+        n_pairs = n_remaining_letters * (2 * n_total_letters - n_remaining_letters - 1)
+        max_bigram_component = n_pairs * max_comfort * max_bigram_freq / 2.0
+    
     else:
-        max_comfort = 1.0  # Maximum possible comfort value, since positions on both hands available
+    
+        # More realistic approach
+        #------------------------
+        # - Split calculation into unassigned-unassigned pairs and assigned-unassigned pairs
+        # - Use actual comfort scores for available positions instead of global maximum
+        # - Use actual bigram frequencies instead of global maximum
+        # - Match best position pairs with best letter pairs
+
+        # 1. Unassigned-to-unassigned bigrams (paired optimally)
+        n_pos_pairs = len(available_positions) * (len(available_positions) - 1) // 2
+        position_pair_scores = np.zeros(n_pos_pairs, dtype=np.float32)
+
+        # Fill position_pair_scores with max comfort score for each position pair
+        idx = 0
+        for i in range(len(available_positions)):
+            for j in range(i+1, len(available_positions)):
+                pos1, pos2 = available_positions[i], available_positions[j]
+                # Different hands
+                if key_LR[pos1] != key_LR[pos2]:  
+                    comfort = 1.0
+                # Same hand - use comfort matrix
+                else:  
+                    # Consider both typing directions for each position pair
+                    comfort = max(comfort_matrix[pos1,pos2], comfort_matrix[pos2,pos1])
+                position_pair_scores[idx] = comfort
+                idx += 1
+        position_pair_scores = np.sort(position_pair_scores)[::-1]  # Sort descending
+
+        # Fill letter_pair_freqs with max frequency for each letter pair
+        n_letter_pairs = len(unassigned) * (len(unassigned) - 1) // 2
+        letter_pair_freqs = np.zeros(n_letter_pairs, dtype=np.float32)
+        idx = 0
+        for i in range(len(unassigned)):
+            for j in range(i+1, len(unassigned)):
+                l1, l2 = unassigned[i], unassigned[j]
+                # Consider both directions for each letter pair
+                freq = max(bigram_freqs[l1,l2], bigram_freqs[l2,l1])
+                letter_pair_freqs[idx] = freq
+                idx += 1
+        letter_pair_freqs = np.sort(letter_pair_freqs)[::-1]  # Sort descending
+
+        # Match best pairs - n_letter_pairs will always be <= n_pos_pairs
+        unassigned_score = np.sum(position_pair_scores[:n_letter_pairs] * letter_pair_freqs)
+
+        # 2. Assigned-to-unassigned bigrams (more realistic)
+        assigned_unassigned_score = 0.0
+        for i in assigned:
+            pos_i = mapping[i]
+            for j in unassigned:
+                freq = max(bigram_freqs[i,j], bigram_freqs[j,i])
+
+                # For each available position for the unassigned letter
+                best_comfort = 0.0
+                for pos_j in available_positions:
+                    # Different hands
+                    if key_LR[pos_i] != key_LR[pos_j]:  
+                        best_comfort = 1.0
+                        break
+                    # Same hand - use comfort matrix
+                    else:  
+                        # Consider both directions:
+                        comfort = max(comfort_matrix[pos_i,pos_j], comfort_matrix[pos_j,pos_i])
+                        best_comfort = max(best_comfort, comfort)
+                assigned_unassigned_score += best_comfort * freq
+
+        max_bigram_component = unassigned_score + assigned_unassigned_score
         
-    # Set maximum bigram frequency possible between:
-    #  - Already assigned letters and unassigned letters
-    #  - Unassigned constrained letters with other unassigned letters
-    #  - Unassigned unconstrained letters with other unassigned letters
-    #
-    # Get max frequency for any bigram involving at least one unassigned letter
-    max_bigram_freq = 0.0
-    # Check assigned -> unassigned and vice versa
-    for i in assigned:
-        max_bigram_freq = max(max_bigram_freq, np.max(bigram_freqs[i, unassigned]))
-        max_bigram_freq = max(max_bigram_freq, np.max(bigram_freqs[unassigned, i]))
-    # Check unassigned -> unassigned
-    for i in unassigned:
-        for j in unassigned:
-            if i != j:
-                max_bigram_freq = max(max_bigram_freq, bigram_freqs[i, j])
-
-    # Only count pairs involving at least one unassigned letter
-    #   If we have x unassigned letters (n_remaining_letters)
-    #   They can form 2x pairs with each assigned letter "a" (both directions)
-    #   And x(x-1) pairs with other unassigned letters (both directions)
-    #   For a total of: x(x-1) + 2ax pairs
-    #     = x(2a + x -1), where a = n_total_letters - x)
-    #     = x(2 * n_total_letters - x - 1) 
-    n_pairs = n_remaining_letters * (2 * n_total_letters - n_remaining_letters - 1)
-
-    # In calculate_layout_score:
+    # Apply weights to total components
+    # From calculate_layout_score:
     #   bigram_component += (comfort_seq1 * freq_seq1 + comfort_seq2 * freq_seq2)
     #   weighted_bigram = bigram_component * bigram_weight / 2.0
-    max_bigram_component = n_pairs * max_comfort * max_bigram_freq / 2.0
-    
-    # Apply weights to total components
     total_letter_score = (current_unweighted_letter_score + max_letter_component) * letter_weight
-    total_bigram_score = (current_unweighted_bigram_score + max_bigram_component) * bigram_weight
-    
+    total_bigram_score = (current_unweighted_bigram_score + max_bigram_component) * bigram_weight / 2.0
+
     return float(total_letter_score + total_bigram_score)
 
 class HeapItem:
@@ -944,6 +1019,11 @@ def branch_and_bound_optimal(
         - In other words, if a Phase 1 solution put 'e' in F and 't' in J, 
           then Phase 2 would use remaining positions (not F or J)
           to arrange the remaining letters.
+
+    Returns:
+        Tuple containing:
+        - List of (score, mapping, detailed_scores) tuples
+        - Total number of permutations processed
     """
     # Get letters and keys from config
     letters_to_assign = config['optimization']['letters_to_assign']
@@ -1100,7 +1180,6 @@ def branch_and_bound_optimal(
     #       to arrange the remaining letters.
     #-------------------------------------------------------------------------
     print("\nPhase 2: Arranging remaining letters...")
-    candidates = []
     
     # Calculate permutations per Phase 1 solution
     perms_per_phase1_solution = perm(phase2_available_positions, phase2_remaining_letters)
@@ -1108,184 +1187,177 @@ def branch_and_bound_optimal(
 
     # Track progress properly
     current_phase1_solution_index = 0
-    perms_in_current_solution = 0
     processed_perms = 0
 
-    # Initialize phase 2 with all phase 1 solutions
-    for phase1_mapping, phase1_used in phase1_solutions:
-        # Reset for new Phase 1 solution
-        perms_in_current_solution = 0
-        candidates = []  # Clear candidates for new Phase 1 solution
-        
-        # Calculate initial score for this arrangement
-        score_tuple = calculate_layout_score(
-            phase1_mapping,
-            key_LR,
-            comfort_matrix,
-            bigram_freqs,
-            letter_freqs,
-            bigram_weight,
-            letter_weight
-        )
-        initial_score = score_tuple[0]
-        
-        # Find first unassigned letter's depth
-        initial_depth = sum(1 for i in range(n_letters_to_assign) if phase1_mapping[i] >= 0)
-        
-        candidates.append(HeapItem(-initial_score, initial_depth, phase1_mapping, phase1_used))
-
-    # Process this Phase 1 solution
+    # Use single progress bar for all Phase 1 solutions
     with tqdm(total=total_perms_phase2, desc="Phase 2", unit='perms') as pbar:
-        while candidates:
-            # Memory check
-            if psutil.virtual_memory().percent > memory_threshold_gb * 100:
-                print("\nWarning: Memory usage high, saving checkpoint and stopping")
-                save_checkpoint(checkpoint_path, {
-                    'candidates': candidates,
-                    'top_n_solutions': top_n_solutions,
-                    'processed_perms': processed_perms,
-                    'start_time': start_time
-                })
-                break
-            
-            # Get next candidate
-            candidate = heapq.heappop(candidates)
-            score = -candidate.score
-            depth = candidate.depth
-            mapping = candidate.mapping
-            used = candidate.used
-            
-            # Process complete solutions
-            # Maintains a priority queue of the best n keyboard layouts found so far, 
-            # constantly updating it as better solutions are discovered.
-            if depth == n_letters_to_assign:
-                if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
-                    continue  # Skip invalid solutions
 
-                perms_in_current_solution += 1
-                processed_perms = (current_phase1_solution_index * perms_per_phase1_solution) + perms_in_current_solution
-                pbar.update(1)
+        # Process each Phase 1 solution separately
+        for phase1_mapping, phase1_used in phase1_solutions:
+            print(f"\nProcessing Phase 1 solution {current_phase1_solution_index + 1}/{len(phase1_solutions)}")
+            
+            # Reset for new Phase 1 solution
+            perms_in_current_solution = 0
+            candidates = []  # Start fresh with empty candidates
+            
+            # Calculate initial score for this arrangement
+            score_tuple = calculate_layout_score(
+                phase1_mapping,
+                key_LR,
+                comfort_matrix,
+                bigram_freqs,
+                letter_freqs,
+                bigram_weight,
+                letter_weight
+            )
+            initial_score = score_tuple[0]
+            
+            # Find first unassigned letter's depth
+            initial_depth = sum(1 for i in range(n_letters_to_assign) if phase1_mapping[i] >= 0)
+            
+            # Initialize with just this Phase 1 solution
+            candidates.append(HeapItem(-initial_score, initial_depth, phase1_mapping, phase1_used))
+            
+            while candidates:
+                # Memory check
+                if psutil.virtual_memory().percent > memory_threshold_gb * 100:
+                    print("\nWarning: Memory usage high, saving checkpoint and stopping")
+                    save_checkpoint(checkpoint_path, {
+                        'candidates': candidates,
+                        'top_n_solutions': top_n_solutions,
+                        'processed_perms': processed_perms,
+                        'start_time': start_time,
+                        'current_phase1_solution_index': current_phase1_solution_index
+                    })
+                    break
                 
-                # Calculate score for this layout
-                score_tuple = calculate_layout_score(
-                    mapping,
-                    key_LR,
-                    comfort_matrix,
-                    bigram_freqs,
-                    letter_freqs,
-                    bigram_weight,
-                    letter_weight
-                )
-                total_score, unweighted_bigram_score, unweighted_letter_score = score_tuple
+                # Get next candidate
+                candidate = heapq.heappop(candidates)
+                score = -candidate.score
+                depth = candidate.depth
+                mapping = candidate.mapping
+                used = candidate.used
+                
+                # Process complete solutions
+                # Maintains a priority queue of the best n keyboard layouts found so far, 
+                # constantly updating it as better solutions are discovered.
+                if depth == n_letters_to_assign:
+                    if not validate_mapping(mapping, constrained_letter_indices, constrained_positions):
+                        continue  # Skip invalid solutions
 
-                # 2. Check if this solution should be considered for the top solutions
-                if (len(top_n_solutions) < n_solutions or 
-                    total_score > worst_top_n_score):
+                    perms_in_current_solution += 1
+                    processed_perms = (current_phase1_solution_index * perms_per_phase1_solution) + perms_in_current_solution
+                    pbar.update(1)
+                    
+                    # Calculate score for this layout
+                    score_tuple = calculate_layout_score(
+                        mapping,
+                        key_LR,
+                        comfort_matrix,
+                        bigram_freqs,
+                        letter_freqs,
+                        bigram_weight,
+                        letter_weight
+                    )
+                    total_score, unweighted_bigram_score, unweighted_letter_score = score_tuple
 
-                    # 3. If the solution qualifies, create a solution tuple
+                    # Add to both phase1 solutions and overall top solutions
                     # Storing the unweighted components allows for:
                     #  - Reweighting the results later without recalculating the base scores
                     #  - Analyzing the relative contributions of bigrams vs individual letters
                     #  - Validating or debugging the scoring system
                     #  - Generating detailed reports about layout performance
                     solution = (
-                        float(unweighted_bigram_score),   # Unweighted component
-                        float(unweighted_letter_score),   # Unweighted component
-                        mapping.tolist()       # The actual layout
+                        float(unweighted_bigram_score),
+                        float(unweighted_letter_score),
+                        mapping.tolist()
                     )
 
-                    # 4. Create a heap item
-                    heap_item = (-float(total_score), len(top_n_solutions), solution)
-
-                    # 5. Manage the heap size
-                    heapq.heappush(top_n_solutions, heap_item)
-                    
-                    if len(top_n_solutions) > n_solutions:
-                        heapq.heappop(top_n_solutions)
-                    
-                    # Update the worst score for future comparisons
-                    worst_top_n_score = -top_n_solutions[0][0]
- 
-                continue
-
-            #-----------------------------------------------------------------
-            # PRUNING CHECK 1: 
-            # Prune the current candidate before we even try expanding it to new positions
-            # Only prune if we have enough solutions and can prove this branch won't yield better ones
-            #-----------------------------------------------------------------
-            if len(top_n_solutions) >= n_solutions:
-                upper_bound = calculate_upper_bound(
-                    mapping, depth, used, key_LR, comfort_matrix,
-                    letter_freqs, bigram_freqs, bigram_weight, letter_weight
-                )
-                
-                margin = 1e-8 * abs(worst_top_n_score)  # Relative margin for precision error
-
-                if upper_bound < worst_top_n_score - margin:
+                    # Track best solutions overall
+                    if len(top_n_solutions) < n_solutions or total_score > worst_top_n_score:
+                        heap_item = (-float(total_score), len(top_n_solutions), solution)
+                        heapq.heappush(top_n_solutions, heap_item)
+                        if len(top_n_solutions) > n_solutions:
+                            heapq.heappop(top_n_solutions)
+                        worst_top_n_score = -top_n_solutions[0][0]
+     
                     continue
 
-            # In phase 2, just use any unassigned position
-            valid_positions = [pos for pos in range(n_keys_to_assign) if not used[pos]]
-            
-            for pos in valid_positions:
-                # Create new state
-                new_mapping = mapping.copy()
-                new_mapping[depth] = pos
-                new_used = used.copy()
-                new_used[pos] = True
-                    
-                # Calculate score
-                score_tuple = calculate_layout_score(
-                    new_mapping,
-                    key_LR,
-                    comfort_matrix,
-                    bigram_freqs,
-                    letter_freqs,
-                    bigram_weight,
-                    letter_weight
-                )
-                new_score = score_tuple[0]
-                
                 #-----------------------------------------------------------------
-                # PRUNING CHECK 2: 
-                # Prune each new candidate we create by assigning positions.
-                # Add candidate if either:
-                # 1. We need more solutions OR
-                # 2. This branch could yield a better solution than our current worst
+                # PRUNING CHECK 1: 
+                # Prune the current candidate before we even try expanding it to new positions
+                # Only prune if we have enough solutions and can prove this branch won't yield better ones
                 #-----------------------------------------------------------------
-                if len(top_n_solutions) < n_solutions or (new_score + upper_bound) > worst_top_n_score:
-                    heapq.heappush(
-                        candidates,
-                        HeapItem(-new_score, depth + 1, new_mapping, new_used)
+                if len(top_n_solutions) >= n_solutions:
+                    upper_bound = calculate_upper_bound(
+                        mapping, depth, used, key_LR, comfort_matrix,
+                        letter_freqs, bigram_freqs, bigram_weight, letter_weight
                     )
-            
-            # Update progress and save checkpoint if needed
-            current_time = time.time()
-            if current_time - last_update_time >= update_interval:
-                update_progress_bar(pbar, processed_perms, start_time, total_perms_phase2)
-                last_update_time = current_time
+                    
+                    margin = 1e-8 * abs(worst_top_n_score)  # Relative margin for precision error
 
-            # Save checkpoint if needed
-            if processed_perms - processed_perms % checkpoint_interval >= last_checkpoint_time:
-                save_checkpoint(checkpoint_path, {
-                    'candidates': candidates,
-                    'top_n_solutions': top_n_solutions,
-                    'processed_perms': processed_perms,
-                    'start_time': start_time
-                })
-                last_checkpoint_time = processed_perms
+                    if upper_bound < worst_top_n_score - margin:
+                        continue
 
-    # Move to next Phase 1 solution
-    current_phase1_solution_index += 1
+                # In phase 2, just use any unassigned position
+                valid_positions = [pos for pos in range(n_keys_to_assign) if not used[pos]]
+                
+                for pos in valid_positions:
+                    # Create new state
+                    new_mapping = mapping.copy()
+                    new_mapping[depth] = pos
+                    new_used = used.copy()
+                    new_used[pos] = True
+                        
+                    # Calculate score
+                    score_tuple = calculate_layout_score(
+                        new_mapping,
+                        key_LR,
+                        comfort_matrix,
+                        bigram_freqs,
+                        letter_freqs,
+                        bigram_weight,
+                        letter_weight
+                    )
+                    new_score = score_tuple[0]
+                    
+                    #-----------------------------------------------------------------
+                    # PRUNING CHECK 2: 
+                    # Prune each new candidate we create by assigning positions.
+                    # Add candidate if either:
+                    # 1. We need more solutions OR
+                    # 2. This branch could yield a better solution than our current worst
+                    #-----------------------------------------------------------------
+                    if len(top_n_solutions) < n_solutions or (new_score + upper_bound) > worst_top_n_score:
+                        heapq.heappush(
+                            candidates,
+                            HeapItem(-new_score, depth + 1, new_mapping, new_used)
+                        )
+                
+                # Update progress and save checkpoint if needed
+                current_time = time.time()
+                if current_time - last_update_time >= update_interval:
+                    pbar.set_postfix({
+                        'Phase1': f"{current_phase1_solution_index + 1}/{len(phase1_solutions)}",
+                        'Perms/sec': f"{processed_perms/(current_time-start_time):,.0f}",
+                        'Memory': f"{psutil.Process().memory_info().rss/1e9:.1f}GB"
+                    })
+                    last_update_time = current_time
 
-    # Print final statistics
-    end_time = time.time()
-    elapsed = end_time - start_time
-    print(f"\nFinal Phase 2 permutation count summary:")
-    print(f"  Total theoretical permutations: {total_perms_phase2}")
-    print(f"  Total processed permutations: {processed_perms} ({processed_perms/total_perms_phase2:.2f}x theoretical)")
-    percent_explored = (processed_perms / total_perms_phase2) * 100
-    print(f"\nSearch completed: {percent_explored:.1f}% of theoretical space explored in {elapsed:.1f} seconds")
+                # Save checkpoint if needed
+                if processed_perms - processed_perms % checkpoint_interval >= last_checkpoint_time:
+                    save_checkpoint(checkpoint_path, {
+                        'candidates': candidates,
+                        'top_n_solutions': top_n_solutions,
+                        'processed_perms': processed_perms,
+                        'start_time': start_time,
+                        'current_phase1_solution_index': current_phase1_solution_index,
+                        'perms_in_current_solution': perms_in_current_solution
+                    })
+                    last_checkpoint_time = processed_perms
+
+            # Move to next Phase 1 solution
+            current_phase1_solution_index += 1
 
     # Convert solutions
     solutions = []
@@ -1306,7 +1378,7 @@ def branch_and_bound_optimal(
             }}
         ))
     
-    return list(reversed(solutions))
+    return list(reversed(solutions)), processed_perms
 
 def optimize_layout(config: dict) -> None:
     """
@@ -1340,17 +1412,20 @@ def optimize_layout(config: dict) -> None:
         letters_assigned=set(letters_assigned),
         keys_assigned=set(keys_assigned)
     )
-
-    # Calculate phase perms
-    total_perms_phase1 = perm(len(keys_to_constrain), len(letters_to_constrain))
-    # For second phase, account for all arrangements for each Phase 1 solution
-    phase2_available_positions = len(keys_to_assign) - len(keys_to_constrain)
-    phase2_remaining_letters =  len(letters_to_assign) - len(letters_to_constrain)
-    total_perms_phase2 = perm(phase2_available_positions, phase2_remaining_letters) * total_perms_phase1
-    #total_perms = total_perms_phase1 + total_perms_phase2
+    
+    # Print detailed search space analysis
     print("\nSearch space analysis:")
-    print(f"Phase 1 (constrained letters): {total_perms_phase1:,} permutations")
-    print(f"Phase 2 (remaining letters): {total_perms_phase2:,} permutations")
+    if search_space['phase1_arrangements'] > 1:
+        print(f"Phase 1 (constrained letters): {search_space['phase1_arrangements']:,} permutations")
+        print(f"Phase 2 (per Phase 1 solution): {search_space['details']['arrangements_per_phase1']:,} permutations")
+        print(f"Total permutations: {search_space['total_perms']:,}")
+        print(f"\nConstraint details:")
+        print(f"- {search_space['details']['constrained_letters']} letters constrained to {search_space['details']['constrained_positions']} positions")
+        print(f"- {search_space['details']['remaining_letters']} letters to arrange in {search_space['details']['remaining_positions']} positions")
+    else:
+        print("No constraints - running single-phase optimization")
+        print(f"Total permutations: {search_space['total_perms']:,}")
+        print(f"- Arranging {search_space['details']['remaining_letters']} letters in {search_space['details']['remaining_positions']} positions")
 
     # Show initial keyboard
     visualize_keyboard_layout(
@@ -1391,9 +1466,9 @@ def optimize_layout(config: dict) -> None:
     print(f"- {len(letters_to_constrain)} constrained letters: {letters_to_constrain}")
     print(f"- {len(keys_to_constrain)} constrained positions: {keys_to_constrain}")
     print(f"- Finding top {n_layouts} solutions")
-    
+
     # Run optimization
-    results = branch_and_bound_optimal(
+    results, processed_perms = branch_and_bound_optimal(
         arrays=arrays,
         weights=weights,
         config=config,
@@ -1418,7 +1493,24 @@ def optimize_layout(config: dict) -> None:
         letters_to_display=letters_assigned,
         keys_to_display=keys_assigned
     )
+    
     save_results_to_csv(sorted_results, config)
+
+    # Final statistics reporting
+    elapsed_time = time.time() - start_time
+    print(f"\nSearch completion summary:")
+    print(f"Total permutations processed: {processed_perms:,}")
+    if processed_perms >= search_space['total_perms']:
+        print("Search completed: 100% of solution space explored")
+    else:
+        percent_explored = (processed_perms / search_space['total_perms']) * 100
+        print(f"Search completed: {percent_explored:.1f}% of solution space explored")
+    print(f"Total runtime: {timedelta(seconds=int(elapsed_time))}")
+    
+    # Add performance statistics
+    if elapsed_time > 0:
+        perms_per_second = processed_perms / elapsed_time
+        print(f"Average performance: {perms_per_second:,.0f} permutations/second")
 
 #--------------------------------------------------------------------
 # Pipeline
