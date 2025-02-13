@@ -1232,9 +1232,6 @@ def branch_and_bound_optimal(
 
             # In phase 2, just use any unassigned position
             valid_positions = [pos for pos in range(n_keys_to_assign) if not used[pos]]
-            nodes_at_depth = len(valid_positions)  # This is how many nodes we're actually adding at this depth
-            processed_nodes += nodes_at_depth
-            pbar.update(nodes_at_depth)
             
             for pos in valid_positions:
                 # Create new state
