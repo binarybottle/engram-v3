@@ -14,20 +14,19 @@ import os
 import pandas as pd
 import numpy as np
 import yaml
-from typing import List, Dict, Set, Tuple
-from math import factorial, comb, perm
+from typing import List, Dict, Tuple
+from math import perm
 from tqdm import tqdm
 import psutil
 import time
 from datetime import datetime, timedelta
-from numba import prange, jit, float64, boolean
-import heapq
+from numba import jit
 import csv
 from collections import defaultdict
 import pickle
 
 #-----------------------------------------------------------------------------
-# Loading and saving functions
+# Loading, validating, and saving functions
 #-----------------------------------------------------------------------------
 def load_config(config_path: str = "config.yaml") -> dict:
     """Load configuration from yaml file and normalize item case and numeric types."""
@@ -154,13 +153,6 @@ def validate_config(config):
             f"Not enough constraint positions ({len(positions_to_constrain)}) "
             f"for constraint items ({len(items_to_constrain)})"
         )
-
-def validate_scores(scores: np.ndarray, name: str) -> None:
-    """Verify scores are properly normalized to [0,1]."""
-    if not np.all(np.isfinite(scores)):
-        raise ValueError(f"{name} contains non-finite values")
-    if np.any(scores < 0) or np.any(scores > 1):
-        raise ValueError(f"{name} must be normalized to [0,1] range")
     
 def prepare_arrays(
     items_to_assign: str,
@@ -403,217 +395,6 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
             ])
     
     print(f"\nResults saved to: {output_path}")
-
-#-----------------------------------------------------------------------------
-# Memory and checkpointing functions
-#-----------------------------------------------------------------------------
-def calculate_memory_upper_bound(n_items: int, n_positions: int) -> dict:
-    """
-    Calculate worst-case memory requirements.
-    """
-    # Fixed sizes in bytes
-    INT32_SIZE = 4
-    INT8_SIZE = 1
-    FLOAT64_SIZE = 8
-    BOOL_SIZE = 1
-    
-    # Core arrays (these are fixed)
-    mapping_size = n_items * INT32_SIZE
-    position_score_matrix_size = n_positions * n_positions * FLOAT64_SIZE
-    score_matrix_size = n_items * n_items * FLOAT64_SIZE
-    item_score_size = n_items * FLOAT64_SIZE
-    
-    # Size of each candidate in queue
-    bytes_per_candidate = (
-        mapping_size +           # partial_mapping array
-        FLOAT64_SIZE +           # score
-        INT32_SIZE +             # depth
-        n_positions * BOOL_SIZE  # used positions array
-    )
-    
-    # Worst case: store candidates for every possible partial assignment
-    # At each depth d, we could have P(n_positions, d) candidates
-    max_queue_size = 0
-    candidates_by_depth = []
-    for depth in range(n_items):
-        candidates_at_depth = perm(n_positions, depth + 1)
-        max_queue_size += candidates_at_depth
-        candidates_by_depth.append(candidates_at_depth)
-    
-    # Total memory
-    queue_memory = max_queue_size * bytes_per_candidate
-    core_memory = position_score_matrix_size + score_matrix_size + item_score_size
-    total_memory = queue_memory + core_memory
-    
-    return {
-        'total_bytes': total_memory,
-        'total_gb': total_memory / (1024**3),
-        'queue_size': max_queue_size,
-        'candidates_by_depth': candidates_by_depth,
-        'breakdown': {
-            'core_arrays_mb': core_memory / (1024**2),
-            'queue_mb': queue_memory / (1024**2),
-            'bytes_per_candidate': bytes_per_candidate
-        }
-    }
-
-def estimate_memory_requirements(n_items: int, n_positions: int, max_candidates: int) -> dict:
-    """
-    Estimate memory requirements more accurately for branch and bound search.
-    """
-    # Fixed sizes for data types in bytes
-    INT32_SIZE = 4
-    INT8_SIZE = 1
-    FLOAT32_SIZE = 4
-    BOOL_SIZE = 1
-    
-    # Core data structure sizes (these are fixed overhead)
-    mapping_size = n_items * INT32_SIZE
-    position_size = n_positions * BOOL_SIZE
-    position_score_matrix_size = n_positions * n_positions * FLOAT32_SIZE
-    score_matrix_size = n_items * n_items * FLOAT32_SIZE
-    item_score_size = n_items * FLOAT32_SIZE
-    
-    # Size of each candidate in the priority queue
-    bytes_per_candidate = (
-        mapping_size +   # partial_mapping array
-        FLOAT32_SIZE +   # score
-        INT32_SIZE +     # depth
-        position_size    # positions boolean array
-    )
-    
-    # For large problems, we need to estimate the working set size
-    # Assume we'll keep max_candidates at each depth
-    max_queue_size = max_candidates * n_items
-    
-    # Calculate branching factor at each depth
-    # For depth d, we have (n_positions - d) choices
-    avg_branching_factor = sum(n_positions - d for d in range(n_items)) / n_items
-    
-    # Estimate working memory needed for search
-    working_memory = max_queue_size * bytes_per_candidate * avg_branching_factor
-    
-    # Calculate total memory including fixed overhead
-    core_memory = (position_score_matrix_size + score_matrix_size + item_score_size)
-    total_bytes = working_memory + core_memory
-    
-    # Add safety margin (50% extra)
-    total_bytes = total_bytes * 1.5
-    
-    # Get available system memory
-    available_memory = psutil.virtual_memory().available
-    
-    # Convert to appropriate units
-    total_mb = total_bytes / (1024 * 1024)
-    total_gb = total_bytes / (1024 * 1024 * 1024)
-    available_gb = available_memory / (1024 * 1024 * 1024)
-    
-    # Calculate theoretical maximum arrangements
-    total_arrangements = perm(n_positions, n_items)
-    
-    # Estimate actual search space (considering constraints and pruning)
-    # Assume we'll only explore about 1% of the theoretical space due to pruning
-    estimated_search_space = total_arrangements // 100
-    
-    # Use more realistic perms per second based on actual performance
-    estimated_perms_per_sec = 100000  # Based on observed performance
-    estimated_seconds = estimated_search_space / estimated_perms_per_sec
-    estimated_runtime = str(timedelta(seconds=int(estimated_seconds)))
-    
-    return {
-        'estimated_bytes': total_bytes,
-        'estimated_mb': total_mb,
-        'estimated_gb': total_gb,
-        'available_memory_gb': available_gb,
-        'memory_sufficient': total_bytes < (available_memory * 0.8),
-        'estimated_runtime': estimated_runtime,
-        'search_space_details': {
-            'theoretical_arrangements': total_arrangements,
-            'estimated_search_space': estimated_search_space,
-            'perms_per_second': estimated_perms_per_sec
-        }
-    }
-
-def setup_checkpointing(config: dict, search_space: dict) -> dict:
-    """
-    Configure checkpointing based on search space size and estimated runtime.
-    
-    Returns:
-        dict with checkpoint settings:
-        - enabled: bool, whether checkpointing is enabled
-        - interval: int, perms between checkpoints
-        - path: str, checkpoint file path
-        - metadata: dict, search configuration data
-    """
-    # Estimate if checkpointing is needed based on search space size
-    LONG_SEARCH_THRESHOLD = 1e9  # 1 billion perms
-    VERY_LONG_SEARCH_THRESHOLD = 1e12  # 1 trillion perms
-    
-    total_perms = search_space['total_perms']
-    estimated_perms_per_second = 100000  # Conservative estimate
-    estimated_runtime = total_perms / estimated_perms_per_second
-    
-    # Determine if we need checkpointing
-    checkpointing_enabled = total_perms > LONG_SEARCH_THRESHOLD
-    
-    if not checkpointing_enabled:
-        return {'enabled': False}
-    
-    # Calculate checkpoint interval based on search size
-    if total_perms > VERY_LONG_SEARCH_THRESHOLD:
-        checkpoint_interval = 1000000  # Every million nodes for very long searches
-    else:
-        checkpoint_interval = 100000   # Every 100k nodes for long searches
-    
-    # Create checkpoint directory if needed
-    checkpoint_dir = "checkpoints"
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    # Create checkpoint filename with search parameters
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    search_params = (
-        f"L{len(config['optimization']['items_to_assign'])}"
-        f"_K{len(config['optimization']['positions_to_assign'])}"
-        f"_C{len(config['optimization']['items_to_constrain'])}"
-    )
-    checkpoint_path = os.path.join(
-        checkpoint_dir, 
-        f"search_{search_params}_{timestamp}.checkpoint"
-    )
-    
-    # Prepare metadata for checkpoint
-    metadata = {
-        'config': config,
-        'search_space': search_space,
-        'timestamp_start': timestamp,
-        'estimated_runtime': str(timedelta(seconds=int(estimated_runtime))),
-        'total_perms': total_perms
-    }
-    
-    return {
-        'enabled': True,
-        'interval': checkpoint_interval,
-        'path': checkpoint_path,
-        'metadata': metadata,
-        'last_save': time.time()
-    }
-
-def save_checkpoint(
-    checkpoint_path: str,
-    current_state: dict
-) -> None:
-    """Save current search state to checkpoint file."""
-    temp_path = f"{checkpoint_path}.tmp"
-    with open(temp_path, 'wb') as f:
-        pickle.dump(current_state, f)
-    os.replace(temp_path, checkpoint_path)
-
-def load_checkpoint(checkpoint_path: str) -> dict:
-    """Load search state from checkpoint file."""
-    if os.path.exists(checkpoint_path):
-        with open(checkpoint_path, 'rb') as f:
-            return pickle.load(f)
-    return None
 
 #-----------------------------------------------------------------------------
 # Visualizing functions
@@ -920,7 +701,10 @@ def calculate_upper_bound(
     # The unassigned pairs loop only does the upper triangle (i,j) not (j,i), 
     # so each pair is counted once in idx, and the score is normalized by n_pairs:
     n_pairs = min(len(position_pair_scores), len(item_pair_scores))
-    unassigned_score = np.sum(position_pair_scores[:n_pairs] * item_pair_scores[:n_pairs]) / n_pairs
+    if n_pairs > 0:
+        unassigned_score = np.sum(position_pair_scores[:n_pairs] * item_pair_scores[:n_pairs]) / n_pairs
+    else:
+        unassigned_score = 0.0
 
     #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
     # 2. Assigned-to-unassigned item_pairs
@@ -961,17 +745,6 @@ def calculate_upper_bound(
 
     return float(total_item_score + total_item_pair_score)
 
-class HeapItem:
-    """Helper class to make heap operations work with numpy arrays."""
-    def __init__(self, score: float, depth: int, mapping: np.ndarray, used: np.ndarray):
-        self.score = score
-        self.depth = depth
-        self.mapping = mapping
-        self.used = used
-    
-    def __lt__(self, other):
-        return self.score < other.score
-
 def get_next_unassigned_item(mapping: np.ndarray) -> int:
     """Find the index of the next unassigned item."""
     for i in range(len(mapping)):
@@ -983,17 +756,22 @@ def branch_and_bound_optimal(
     arrays: tuple,
     weights: tuple,
     config: dict,
-    n_solutions: int = 5,
-    memory_threshold_gb: float = 0.9
+    n_solutions: int = 5
 ) -> List[Tuple[float, Dict[str, str], Dict]]:
     """
-    Branch and bound implementation with phased search for constrained items,
-    improved progress monitoring, and checkpoint saving.
-
+    Branch and bound implementation using depth-first search. 
+    
+    Uses DFS instead of best-first search because:
+    1. With a mathematically sound upper bound for pruning, the search order 
+       doesn't affect optimality
+    2. DFS requires only O(depth) memory vs O(width^depth) for best-first
+    3. Simpler implementation without heap management complexity
+    
+    Search is conducted in two phases:
     Phase 1:
-      - Finds all valid arrangements of constrained items ('e', 't') 
-        in constrained positions (F, D, J, K).
-      - Each arrangement marks certain positions as used/assigned.
+      - Finds all valid arrangements of constrained items (e.g., 'e', 't') 
+        in constrained positions (e.g., F, D, J, K).
+      - Each arrangement marks positions as used/assigned.
 
     Phase 2: For each Phase 1 solution, arrange remaining items
       - For each valid arrangement from Phase 1
@@ -1001,6 +779,12 @@ def branch_and_bound_optimal(
         - In other words, if a Phase 1 solution put 'e' in F and 't' in J, 
           then Phase 2 would use remaining positions (not F or J)
           to arrange the remaining items.
+
+    Args:
+        arrays: Tuple of (item_scores, item_pair_score_matrix, position_score_matrix)
+        weights: Tuple of (item_weight, item_pair_weight)
+        config: Configuration dictionary with optimization parameters
+        n_solutions: Number of top solutions to maintain
 
     Returns:
         Tuple containing:
@@ -1030,18 +814,21 @@ def branch_and_bound_optimal(
                                    if item in constrained_items)
     
     # Initialize search structures
-    candidates = []
-    top_n_solutions = []
+    solutions = []  # Will store (score, unweighted_scores, mapping) tuples
     worst_top_n_score = float('-inf')
     
     # Initialize mapping and used positions
     initial_mapping = np.full(n_items_to_assign, -1, dtype=np.int32)
     initial_used = np.zeros(n_positions_to_assign, dtype=bool)
 
-    # Add exploration tracking
-    min_solutions_before_pruning = max(n_solutions * 10, 1000)
-    explored_nodes = 0
-    unique_scores = set()
+    # Track statistics
+    processed_perms = 0
+    pruning_stats = {
+        'depth': defaultdict(int),  # Count pruned branches by depth
+        'margin': [],               # Track pruning margins (diff between upper bound and worst score)
+        'total_pruned': 0,
+        'total_explored': 0
+    }
 
     # Handle pre-assigned items
     if items_assigned:
@@ -1056,17 +843,6 @@ def branch_and_bound_optimal(
                 initial_used[pos] = True
                 print(f"Pre-assigned: {item} -> {position} (position {pos})")
     
-    # Calculate initial score
-    score_tuple = calculate_layout_score(
-        initial_mapping,
-        position_score_matrix,
-        item_scores,
-        item_pair_score_matrix,
-        item_weight,
-        item_pair_weight
-    )
-    initial_score = score_tuple[0]
-    
     # Calculate phase perms
     total_perms_phase1 = perm(len(constrained_positions), len(constrained_items))
     phase2_remaining_items = n_items_to_assign - len(constrained_items) - len(items_assigned)
@@ -1078,192 +854,146 @@ def branch_and_bound_optimal(
     print(f"Phase 2 (Remaining items): {total_perms_phase2:,} permutations")
     
     # Track progress
-    processed_perms = 0
     start_time = time.time()
-    last_update_time = start_time
-    update_interval = 5  # seconds
 
-    #-------------------------------------------------------------------------
-    # Phase 1: Find all valid arrangements of constrained items
-    #-------------------------------------------------------------------------
-    phase1_solutions = []
-    phase1_candidates = [HeapItem(initial_score, 0, initial_mapping, initial_used)]  # Use positive score
-    
-    #print("\nPhase 1: Arranging constrained items...")
-
-    # Track pruning
-    pruning_stats = {
-        'depth': defaultdict(int),  # Count pruned branches by depth
-        'margin': [],               # Track pruning margins (diff between upper bound and worst score)
-        'total_pruned': 0,
-        'total_explored': 0
-    }
-
-    with tqdm(total=total_perms_phase1, desc="Phase 1", unit='perms') as pbar:
-        while phase1_candidates:
-            candidate = heapq.heappop(phase1_candidates)
-            depth = candidate.depth
-            mapping = candidate.mapping
-            used = candidate.used
+    def phase1_dfs(mapping: np.ndarray, used: np.ndarray, depth: int, pbar: tqdm) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """DFS for Phase 1 (constrained items)."""
+        solutions = []
+        
+        # Found a valid phase 1 arrangement
+        if all(mapping[i] >= 0 for i in constrained_item_indices):
+            solutions.append((mapping.copy(), used.copy()))
+            pbar.update(1)
+            return solutions
             
-            # Found a valid phase 1 arrangement
-            if all(mapping[i] >= 0 for i in constrained_item_indices):
-                phase1_solutions.append((mapping.copy(), used.copy()))
-                pbar.update(1)
-                continue
+        # Try next constrained item
+        current_item_idx = -1
+        for i in constrained_item_indices:
+            if mapping[i] < 0:
+                current_item_idx = i
+                break
                 
-            # Try next constrained item
-            current_item_idx = -1
-            for i in constrained_item_indices:
-                if mapping[i] < 0:
-                    current_item_idx = i
-                    break
-                    
-            # Try each constrained position
-            for pos in constrained_positions:
-                if not used[pos]:
-                    new_mapping = mapping.copy()
-                    new_mapping[current_item_idx] = pos
-                    new_used = used.copy()
-                    new_used[pos] = True
-                    phase1_candidates.append(HeapItem(0, depth + 1, new_mapping, new_used))
-                
-    print(f"\nFound {len(phase1_solutions)} valid phase 1 arrangements")
-    
-    #-------------------------------------------------------------------------
-    # Phase 2: For each Phase 1 solution, arrange remaining items
-    #-------------------------------------------------------------------------
-    #print("\nPhase 2: Arranging remaining items...")
-    current_phase1_solution_index = 0
+        # Try each constrained position
+        for pos in constrained_positions:
+            if not used[pos]:
+                new_mapping = mapping.copy()
+                new_mapping[current_item_idx] = pos
+                new_used = used.copy()
+                new_used[pos] = True
+                solutions.extend(phase1_dfs(new_mapping, new_used, depth + 1, pbar))
+        
+        return solutions
 
-    with tqdm(total=total_perms_phase2, desc="Phase 2", unit='perms') as pbar:
-        for phase1_mapping, phase1_used in phase1_solutions:
-            print(f"\nProcessing Phase 1 solution {current_phase1_solution_index + 1}/{len(phase1_solutions)}")
+    def phase2_dfs(
+        mapping: np.ndarray, 
+        used: np.ndarray, 
+        depth: int,
+        pbar: tqdm
+    ) -> None:
+        """DFS for Phase 2 (remaining items)."""
+        nonlocal solutions, worst_top_n_score, processed_perms
+        
+        # Process complete solutions
+        if depth == n_items_to_assign:
+            if not validate_mapping(mapping, constrained_item_indices, constrained_positions):
+                return
+
+            processed_perms += 1
+            pbar.update(1)
             
-            # Reset candidates for this phase 1 solution
-            candidates = []
-            
-            # Calculate initial score for this arrangement
             score_tuple = calculate_layout_score(
-                phase1_mapping,
+                mapping,
                 position_score_matrix,
                 item_scores,
                 item_pair_score_matrix,
                 item_weight,
                 item_pair_weight
             )
-            initial_score2 = score_tuple[0]
+            total_score, unweighted_item_score, unweighted_item_pair_score = score_tuple
+
+            if len(solutions) < n_solutions or total_score > worst_top_n_score:
+                solution = (
+                    total_score,
+                    unweighted_item_score,
+                    unweighted_item_pair_score,
+                    mapping.tolist()
+                )
+                solutions.append(solution)
+                solutions.sort(key=lambda x: x[0])  # Sort by total_score
+                if len(solutions) > n_solutions:
+                    solutions.pop(0)  # Remove worst solution
+                worst_top_n_score = solutions[0][0]
+            return
+
+        # Find next unassigned item
+        current_item_idx = get_next_unassigned_item(mapping)
+        if current_item_idx is None:
+            return
+
+        # Get valid positions for this item
+        if current_item_idx in constrained_item_indices:
+            valid_positions = [pos for pos in constrained_positions if not used[pos]]
+        else:
+            valid_positions = [pos for pos in range(n_positions_to_assign) if not used[pos]]
+            
+        # Try each valid position
+        for pos in valid_positions:
+            new_mapping = mapping.copy()
+            new_mapping[current_item_idx] = pos
+            new_used = used.copy()
+            new_used[pos] = True
+            
+            # Only prune if we have n solutions to compare against
+            if len(solutions) >= n_solutions:
+                upper_bound = calculate_upper_bound(
+                    new_mapping, depth + 1, new_used,
+                    position_score_matrix, item_scores,
+                    item_pair_score_matrix, item_weight, item_pair_weight
+                )
+                
+                margin = upper_bound - (worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps)
+                if margin < 0:  # We can safely prune
+                    pruning_stats['depth'][depth] += 1
+                    pruning_stats['margin'].append(margin)
+                    pruning_stats['total_pruned'] += 1
+                    continue
+                pruning_stats['total_explored'] += 1
+
+            # Recurse
+            phase2_dfs(new_mapping, new_used, depth + 1, pbar)
+
+    #-------------------------------------------------------------------------
+    # Phase 1: Find all valid arrangements of constrained items
+    #-------------------------------------------------------------------------
+    phase1_solutions = []
+    with tqdm(total=total_perms_phase1, desc="Phase 1", unit='perms') as pbar:
+        phase1_solutions = phase1_dfs(initial_mapping, initial_used, 0, pbar)
+    
+    print(f"\nFound {len(phase1_solutions)} valid phase 1 arrangements")
+    
+    #-------------------------------------------------------------------------
+    # Phase 2: For each Phase 1 solution, arrange remaining items
+    #-------------------------------------------------------------------------
+    current_phase1_solution_index = 0
+
+    with tqdm(total=total_perms_phase2, desc="Phase 2", unit='perms') as pbar:
+        for phase1_mapping, phase1_used in phase1_solutions:
+            print(f"\nProcessing Phase 1 solution {current_phase1_solution_index + 1}/{len(phase1_solutions)}")
             
             # Calculate initial depth based on assigned items
             initial_depth = sum(1 for i in range(n_items_to_assign) if phase1_mapping[i] >= 0)
-
-            # Use phase1_mapping and phase1_used for initial candidate
-            candidates.append(HeapItem(initial_score2, initial_depth, phase1_mapping, phase1_used))
             
-            while candidates:
-                candidate = heapq.heappop(candidates)
-                score = candidate.score  # Using positive scores
-                depth = candidate.depth
-                mapping = candidate.mapping
-                used = candidate.used
-                
-                explored_nodes += 1
-                unique_scores.add(score)
-                
-                # Process complete solutions
-                if depth == n_items_to_assign:
-                    if not validate_mapping(mapping, constrained_item_indices, constrained_positions):
-                        continue
-
-                    processed_perms += 1
-                    pbar.update(1)
-                    
-                    score_tuple = calculate_layout_score(
-                        mapping,
-                        position_score_matrix,
-                        item_scores,
-                        item_pair_score_matrix,
-                        item_weight,
-                        item_pair_weight
-                    )
-                    total_score, unweighted_item_score, unweighted_item_pair_score = score_tuple
-
-                    if len(top_n_solutions) < n_solutions or total_score > worst_top_n_score:
-                        solution = (
-                            unweighted_item_score,
-                            unweighted_item_pair_score,
-                            mapping.tolist()
-                        )
-                        heap_item = (total_score, len(top_n_solutions), solution)
-                        heapq.heappush(top_n_solutions, heap_item)
-                        if len(top_n_solutions) > n_solutions:
-                            heapq.heappop(top_n_solutions)
-                        worst_top_n_score = top_n_solutions[0][0]
-                    continue
-
-                # Find next unassigned item
-                current_item_idx = get_next_unassigned_item(mapping)
-                if current_item_idx is None:
-                    continue
-
-                # Get valid positions for this item
-                if current_item_idx in constrained_item_indices:
-                    valid_positions = [pos for pos in constrained_positions if not used[pos]]
-                else:
-                    valid_positions = [pos for pos in range(n_positions_to_assign) if not used[pos]]
-                    
-                # Try each valid position
-                for pos in valid_positions:
-                    new_mapping = mapping.copy()
-                    new_mapping[current_item_idx] = pos
-                    new_used = used.copy()
-                    new_used[pos] = True
-                    
-                    score_tuple = calculate_layout_score(
-                        new_mapping,
-                        position_score_matrix,
-                        item_scores,
-                        item_pair_score_matrix,
-                        item_weight,
-                        item_pair_weight
-                    )
-                    new_score = score_tuple[0]
-                    
-                    # Only calculate upper bound if we have enough solutions and diversity
-                    if len(unique_scores) >= min_solutions_before_pruning and len(top_n_solutions) >= n_solutions:
-                        upper_bound = calculate_upper_bound(
-                            new_mapping, depth + 1, new_used,
-                            position_score_matrix, item_scores,
-                            item_pair_score_matrix, item_weight, item_pair_weight
-                        )
-                        
-                        margin = upper_bound - (worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps)
-                        if margin < 0:  # We can safely prune
-                            pruning_stats['depth'][depth] += 1
-                            pruning_stats['margin'].append(margin)
-                            pruning_stats['total_pruned'] += 1
-                            continue
-                        pruning_stats['total_explored'] += 1
-
-                    heapq.heappush(candidates, HeapItem(new_score, depth + 1, new_mapping, new_used))
-
-                # Memory check with gradual reduction
-                memory_usage = psutil.Process().memory_info().rss / 1e9
-                if memory_usage > memory_threshold_gb:
-                    candidates.sort(reverse=True)
-                    candidates = candidates[:len(candidates)//2]
-                    continue
-                    
+            # Start DFS from this phase 1 solution
+            phase2_dfs(phase1_mapping, phase1_used, initial_depth, pbar)
+            
             current_phase1_solution_index += 1
 
-    # Convert final solutions
-    solutions = []
-    while top_n_solutions:
-        score, _, solution = heapq.heappop(top_n_solutions)
-        unweighted_item_score, unweighted_item_pair_score, mapping_list = solution
+    # Convert final solutions to return format
+    return_solutions = []
+    for score, unweighted_item_score, unweighted_item_pair_score, mapping_list in reversed(solutions):
         mapping = np.array(mapping_list, dtype=np.int32)
         item_mapping = dict(zip(items_to_assign, [positions_to_assign[i] for i in mapping]))
-        solutions.append((
+        return_solutions.append((
             score,
             item_mapping,
             {'total': {
@@ -1288,7 +1018,7 @@ def branch_and_bound_optimal(
         print(f"  Max: {np.max(margins):.6f}")
         print(f"  Mean: {np.mean(margins):.6f}")
 
-    return list(reversed(solutions)), processed_perms
+    return return_solutions, processed_perms
 
 def optimize_layout(config: dict) -> None:
     """
