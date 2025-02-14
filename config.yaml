@@ -18,11 +18,11 @@ paths:
 #-----------------------------------------------------------------------
 optimization:
 
-  items_to_assign:     "etaoinsrh" #ldcu"   # items to arrange in positions
+  items_to_assign:     "etaoinsrh" #ddcu"   # items to arrange in positions
   positions_to_assign: "FDSVERAJKL" #MIU;"  # available positions
 
-  items_to_constrain:     "eta"           # Subset of items_to_assign to arrange within positions_to_constrain
-  positions_to_constrain: "VERAJK"         # Subset of positions_to_assign to constrain arrangement of items_to_constrain
+  items_to_constrain:     "" #"eta"           # Subset of items_to_assign to arrange within positions_to_constrain
+  positions_to_constrain: "" #VERAJK"         # Subset of positions_to_assign to constrain arrangement of items_to_constrain
 
   items_assigned:        ""              # Items already assigned to positions
   positions_assigned:    ""              # Positions that are already filled 
@@ -33,7 +33,7 @@ optimization:
     item_scale: "log10"
     position_scale: "linear"
 
-  nlayouts: 100                          # Number of top layouts to display and save
+  nlayouts: 10                          # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Visualization Settings
