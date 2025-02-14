@@ -403,6 +403,30 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
     """
     Print a visual representation of a keyboard layout showing assigned items.
     """
+    # Templates
+    KEYBOARD_TEMPLATE = """╭───────────────────────────────────────────────╮
+│ Layout: {title:<34}    │
+├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┤
+│ {q:^3} │ {w:^3} │ {e:^3} │ {r:^3} ║ {u:^3} │ {i:^3} │ {o:^3} │ {p:^3} │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│ {a:^3} │ {s:^3} │ {d:^3} │ {f:^3} ║ {j:^3} │ {k:^3} │ {l:^3} │ {sc:^3} │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│ {z:^3} │ {x:^3} │ {c:^3} │ {v:^3} ║ {m:^3} │ {cm:^3} │ {dt:^3} │ {sl:^3} │
+╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯"""
+
+    QWERTY_KEYBOARD_TEMPLATE = """╭───────────────────────────────────────────────╮
+│ Layout: {title:<34}    │
+├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┤
+│  Q  │  W  │  E  │  R  ║  U  │  I  │  O  │  P  │
+│ {q:^3} │ {w:^3} │ {e:^3} │ {r:^3} ║ {u:^3} │ {i:^3} │ {o:^3} │ {p:^3} │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│  A  │  S  │  D  │  F  ║  J  │  K  │  L  │  ;  │
+│ {a:^3} │ {s:^3} │ {d:^3} │ {f:^3} ║ {j:^3} │ {k:^3} │ {l:^3} │ {sc:^3} │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│  Z  │  X  │  C  │  V  ║  M  │  ,  │  .  │  /  │
+│ {z:^3} │ {x:^3} │ {c:^3} │ {v:^3} ║ {m:^3} │ {cm:^3} │ {dt:^3} │ {sl:^3} │
+╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯"""
+
     # Position mapping for special characters
     position_mapping = {
         ';': 'sc',  # semicolon
@@ -466,8 +490,8 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
                 # Just show the mapped item in uppercase
                 layout_chars[converted_position] = item.upper()
 
-    # Get template from config and print
-    template = config['visualization']['keyboard_template']
+    # Use template from config if specified, otherwise use default
+    template = KEYBOARD_TEMPLATE  # QWERTY_KEYBOARD_TEMPLATE
     print(template.format(**layout_chars))
 
 def calculate_total_perms(
