@@ -1,86 +1,45 @@
-# engram-v3/config.yaml
-# Configuration file for keyboard layout optimization.
+# optimize_layouts/config.yaml
+# Configuration file for item-to-position layout optimization.
 
 #-----------------------------------------------------------------------
 # Paths
 #-----------------------------------------------------------------------
 paths:
   input:
-    two_key_comfort_scores_file: "input/estimated_bigram_scores.csv"
-    one_key_comfort_scores_file: "input/estimated_key_scores.csv"
+    item_scores_file:          "input/letter_frequencies_english.csv"
+    item_pair_scores_file:     "input/letter_pair_frequencies_english.csv"
+    position_scores_file:      "input/key_comfort_estimates.csv"
+    position_pair_scores_file: "input/key_pair_comfort_estimates.csv"
   output:
-    layout_results_folder: "output/layouts"
+    layout_results_folder:     "output/layouts"
 
 #-----------------------------------------------------------------------
 # Optimization Settings
 #-----------------------------------------------------------------------
-# Left home block of 12 keys in descending comfort order: FDSVERAWCQXZ
-# Letters in descending frequency: etaoinsrhldcumfpgwybvkxjqz
-# Vowels/consonants: eaoiu / tnsrhldc mfpgwybvkxj [qz]
-# Most comfortable keys (left/right): FDSVERAW / JKLMIU;O
-# Goal: Optimally arrange the 24 most frequent letters (not q or z)
-#       in the 24 home block keys.
-# (1) Constrain E and T (most common letters) to the 4 most comfortable keys.
-# (2) Optimally arrange the top 13 letters (with > median frequency "u") 
-#     within the 13 most comfortable keys.
-# (3) Optimally arrange the 11 remaining letters (not q or z)
-#     in the 11 remaining home block keys.
-# (4) Optimally arrange q and z in the two least comfortable keys.
-
 optimization:
 
-  letters_assigned: ""          # Letters already assigned to keys_assigned
-  keys_assigned:    ""          # Keys assigned letters_assigned
+  items_to_assign:     "etaoinsrh" #ldcu"   # items to arrange in positions
+  positions_to_assign: "FDSVERAJKL" #MIU;"  # available positions
 
-  letters_to_constrain: "et"    # Subset of letters_to_assign to arrange within keys_to_constrain
-  keys_to_constrain: "FDJK"     # Subset of keys_to_assign to constrain arrangement of letters_to_constrain
+  items_to_constrain:     "eta"           # Subset of items_to_assign to arrange within positions_to_constrain
+  positions_to_constrain: "VERAJK"         # Subset of positions_to_assign to constrain arrangement of items_to_constrain
 
-  letters_to_assign: "etaoinsrhldcu"  # 13 Letters to arrange
-  keys_to_assign: "FDSVERAJKLMIU;"    # 13 Keys to arrange letters_to_assign
+  items_assigned:        ""              # Items already assigned to positions
+  positions_assigned:    ""              # Positions that are already filled 
 
   scoring:  
-    bigram_weight: 0.5  # Weight for bigram / 2-key score
-    letter_weight: 0.5  # Weight for letter / 1-key score
-  nlayouts: 10          # Number of top layouts to display and save
+    item_weight: 0.5                     # Weight for single-item scoring
+    item_pair_weight: 0.5                # Weight for item_pair scoring
+    item_scale: "log10"
+    position_scale: "linear"
 
-#-----------------------------------------------------------------------
-# Layout Settings
-#-----------------------------------------------------------------------
-layout:
-  # Define the keyboard positions
-  positions:
-    right:
-      top: ['u', 'i', 'o', 'p']
-      home: ['j', 'k', 'l', ';']
-      bottom: ['m', ',', '.', '/']
-    left:
-      top: ['q', 'w', 'e', 'r']
-      home: ['a', 's', 'd', 'f']
-      bottom: ['z', 'x', 'c', 'v']
-  
-  # Define position equivalence mappings  
-  position_mappings:
-    right_to_left:
-      # Top row
-      'u': 'r'
-      'i': 'e'
-      'o': 'w'
-      'p': 'q'
-      # Home row
-      'j': 'f'
-      'k': 'd'
-      'l': 's'
-      ';': 'a'
-      # Bottom row
-      'm': 'v'
-      ',': 'c'
-      '.': 'x'
-      '/': 'z'
+  nlayouts: 100                          # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Visualization Settings
 #-----------------------------------------------------------------------
 visualization:
+  print_keyboard: True
   keyboard_template: |
     ╭───────────────────────────────────────────────╮
     │ Layout: {title:<34}    │
@@ -91,7 +50,7 @@ visualization:
     ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
     │ {z:^3} │ {x:^3} │ {c:^3} │ {v:^3} ║ {m:^3} │ {cm:^3} │ {dt:^3} │ {sl:^3} │
     ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
-  keyboard_qwerty_template: |
+  qwerty_keyboard_template: |
     ╭───────────────────────────────────────────────╮
     │ Layout: {title:<34}    │
     ├─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┤

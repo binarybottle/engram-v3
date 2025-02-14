@@ -1,0 +1,13 @@
+Left home block of 12 positions in descending comfort order: FDSVERAWCQXZ
+items in descending frequency: etaoinsrhldcumfpgwybvkxjqz
+Vowels/consonants: eaoiu / tnsrhldc mfpgwybvkxj [qz]
+Most comfortable positions (left/right): FDSVERAW / JKLMIU;O
+Goal: Optimally arrange the 24 most frequent items (not q or z)
+      in the 24 home block positions.
+(1) Constrain E and T (most common items) to the 4 most comfortable positions.
+(2) Optimally arrange the top 13 items (with > median frequency "u") 
+    within the 13 most comfortable positions.
+(3) Optimally arrange the 11 remaining items (not q or z)
+    in the 11 remaining home block positions.
+(4) Optimally arrange q and z in the two least comfortable positions.
+

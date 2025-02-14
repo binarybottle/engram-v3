@@ -7,6 +7,20 @@ https://github.com/binarybottle/engram-v3.git
 
 Author: Arno Klein (binarybottle.com)
 
+This script uses a branch and bound algorithm to find optimal positions for items 
+and item pairs by jointly considering two scoring components: 
+item/item_pair scores and position/position_pair scores.
+
+The primary intended use-case is keyboard layout optimization for touch typing, where:
+  - Items and item-pairs correspond to letters and bigrams.
+  - Positions and position-pairs correspond to keys and key-pairs.  
+  - Item scores and item-pair scores correspond to frequency of occurrence 
+    of letters and bigrams in a given language.
+  - Position scores and position-pair scores correspond to measures of speed or comfort  
+    when typing single keys or pairs of keys (in a given language).
+  
+
+
 ## Context
 This software optimizes letter arrangements on a keyboard.
 It scores layouts based on bigram and letter frequencies (in English) 
