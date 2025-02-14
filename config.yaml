@@ -33,4 +33,8 @@ optimization:
 
   nlayouts: 100                          # Number of top layouts to display and save
 
-
+#-----------------------------------------------------------------------
+# Visualization Settings
+#-----------------------------------------------------------------------
+visualization: 
+  print_keyboard: True

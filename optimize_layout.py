@@ -490,10 +490,9 @@ def visualize_keyboard_layout(mapping: Dict[str, str] = None, title: str = "Layo
                 # Just show the mapped item in uppercase
                 layout_chars[converted_position] = item.upper()
 
-    # Use template from config if specified, otherwise use default
-    template = KEYBOARD_TEMPLATE  # QWERTY_KEYBOARD_TEMPLATE
+    template = KEYBOARD_TEMPLATE
     print(template.format(**layout_chars))
-
+    
 def calculate_total_perms(
     n_items: int,
     n_positions: int,
