@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from numba import prange, jit, float64, boolean
 import heapq
 import csv
+from collections import defaultdict
 import pickle
 
 #-----------------------------------------------------------------------------
@@ -132,6 +133,13 @@ def validate_config(config):
             f"for constraint items ({len(items_to_constrain)})"
         )
 
+def validate_scores(scores: np.ndarray, name: str) -> None:
+    """Verify scores are properly normalized to [0,1]."""
+    if not np.all(np.isfinite(scores)):
+        raise ValueError(f"{name} contains non-finite values")
+    if np.any(scores < 0) or np.any(scores > 1):
+        raise ValueError(f"{name} must be normalized to [0,1] range")
+    
 def prepare_arrays(
     items_to_assign: str,
     positions_to_assign: str,
@@ -140,9 +148,7 @@ def prepare_arrays(
     norm_position_scores: Dict[str, float],
     norm_position_pair_scores: Dict[Tuple[str, str], float]
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Prepare input arrays for the scoring function.
-    """
+    """Prepare input arrays and verify they are normalized to [0,1]."""
     n_items_to_assign = len(items_to_assign)
     n_positions_to_assign = len(positions_to_assign)
     
@@ -165,138 +171,140 @@ def prepare_arrays(
     for i, l1 in enumerate(items_to_assign):
         for j, l2 in enumerate(items_to_assign):
             item_pair_score_matrix[i, j] = norm_item_pair_scores.get((l1.lower(), l2.lower()), 0.0)
+
+    # Verify all scores are normalized [0,1]
+    arrays_to_check = [
+        (item_scores, "Item scores"),
+        (item_pair_score_matrix, "Item pair scores"),
+        (position_score_matrix, "Position scores")
+    ]
+    
+    for arr, name in arrays_to_check:
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"{name} contains non-finite values")
+        if np.any(arr < 0) or np.any(arr > 1):
+            raise ValueError(f"{name} must be normalized to [0,1] range")
     
     return item_scores, item_pair_score_matrix, position_score_matrix
 
-def load_and_normalize_scores(config: dict) -> Tuple[Dict[Tuple[str, str], float], Dict[str, float]]:
+def detect_and_normalize_distribution(scores: np.ndarray, name: str = '') -> np.ndarray:
     """
-    Load and normalize scores (with float32 precision):
-    - item scores
-    - item pair scores
-    - position scores
-    - position pair scores
+    Automatically detect distribution type and apply appropriate normalization.
+    Returns scores normalized to [0,1] range.
     """
-    # Load raw item and item-pair data
+    # Handle empty or constant arrays
+    if len(scores) == 0 or np.all(scores == scores[0]):
+        return np.zeros_like(scores)
+
+    # Get basic statistics
+    non_zeros = scores[scores != 0]
+    if len(non_zeros) == 0:
+        return np.zeros_like(scores)
+        
+    min_nonzero = np.min(non_zeros)
+    max_val = np.max(scores)
+    mean = np.mean(non_zeros)
+    median = np.median(non_zeros)
+    skew = np.mean(((non_zeros - mean) / np.std(non_zeros)) ** 3)
+    
+    # Calculate ratio between consecutive sorted values
+    sorted_nonzero = np.sort(non_zeros)
+    ratios = sorted_nonzero[1:] / sorted_nonzero[:-1]
+    
+    # Detect distribution type
+    if len(scores[scores == 0]) / len(scores) > 0.3:
+        # Sparse distribution with many zeros
+        print(f"{name}: Sparse distribution detected")
+        adjusted_scores = np.where(scores > 0, scores, min_nonzero / 10)
+        log_scores = np.log10(adjusted_scores)
+        return (log_scores - np.min(log_scores)) / (np.max(log_scores) - np.min(log_scores))
+    
+    elif skew > 2 or np.median(ratios) > 1.5:
+        # Heavy-tailed/exponential/zipfian distribution
+        print(f"{name}: Heavy-tailed distribution detected")
+        log_scores = np.log10(scores + min_nonzero/10)
+        return (log_scores - np.min(log_scores)) / (np.max(log_scores) - np.min(log_scores))
+        
+    elif abs(mean - median) / mean < 0.1:
+        # Roughly symmetric distribution
+        print(f"{name}: Symmetric distribution detected")
+        return (scores - np.min(scores)) / (np.max(scores) - np.min(scores))
+        
+    else:
+        # Default to robust scaling
+        print(f"{name}: Using robust scaling")
+        q1, q99 = np.percentile(scores, [1, 99])
+        scaled = (scores - q1) / (q99 - q1)
+        return np.clip(scaled, 0, 1)
+
+def load_and_normalize_scores(config: dict):
+    """Load and normalize scores."""
+    # Load raw data
     item_df = pd.read_csv(config['paths']['input']['item_scores_file'])
     item_pair_df = pd.read_csv(config['paths']['input']['item_pair_scores_file'])
-    item_scale = config['optimization']['scoring']['item_scale']
-
-    # Load raw position and position-pair data
     position_df = pd.read_csv(config['paths']['input']['position_scores_file'])
     position_pair_df = pd.read_csv(config['paths']['input']['position_pair_scores_file'])
-    position_scale = config['optimization']['scoring']['position_scale']
-
-    print(f"Loaded item scores: {len(item_df)} entries")
-    print(f"Sample scores: {item_df.head()}")
-
+    
     #-------------------------------------------------------------------------
     # Create normalized item scores dictionary 
     #-------------------------------------------------------------------------
     norm_item_scores = {}
     scores = item_df['score'].values
-
-    if item_scale == 'log10':
-        # Apply log transform
-        log_scores = np.log10(scores)
-        # Normalize to [0,1]
-        min_log = np.min(log_scores)
-        max_log = np.max(log_scores)
-        norm_scores = (log_scores - min_log) / (max_log - min_log)
-    else:  # linear
-        min_score = np.min(scores)
-        max_score = np.max(scores)
-        norm_scores = (scores - min_score) / (max_score - min_score)
-    
-    # Store normalized scores
-    for (idx, row), norm_score in zip(item_df.iterrows(), norm_scores):
-        norm_item_scores[row['item'].lower()] = np.float32(norm_score)
+    norm_scores = detect_and_normalize_distribution(scores, 'Item scores')
+    print("Original item scores:", min(scores), "to", max(scores))
+    print("Normalized item scores:", min(norm_scores), "to", max(norm_scores))
+    for idx, row in item_df.iterrows():
+        norm_item_scores[row['item'].lower()] = np.float32(norm_scores[idx])
         
     #-------------------------------------------------------------------------
-    # Create normalized item-pair scores dictionary
+    # Create normalized item-pair scores dictionary 
     #-------------------------------------------------------------------------
     norm_item_pair_scores = {}
-    scores = item_df['score'].values
-    
-    if item_scale == 'log10':
-        # Apply log transform
-        log_scores = np.log10(scores)
-        # Normalize to [0,1]
-        min_log = np.min(log_scores)
-        max_log = np.max(log_scores)
-        norm_scores = (log_scores - min_log) / (max_log - min_log)
-    else:  # linear
-        min_score = np.min(scores)
-        max_score = np.max(scores)
-        norm_scores = (scores - min_score) / (max_score - min_score)
-    
-    # Store normalized scores
-    for (idx, row), norm_score in zip(item_df.iterrows(), norm_scores):
-        norm_item_scores[row['item'].lower()] = np.float32(norm_score)
+    scores = item_pair_df['score'].values
+    norm_scores = detect_and_normalize_distribution(scores, 'Item pair scores')
+    print("Original item pair scores:", min(scores), "to", max(scores))
+    print("Normalized item pair scores:", min(norm_scores), "to", max(norm_scores))
+    for idx, row in item_pair_df.iterrows():
+        item_pair = row['item_pair']
+        if not isinstance(item_pair, str):
+            print(f"Warning: non-string item_pair at index {idx}: {item_pair} of type {type(item_pair)}")
+            continue
+        chars = tuple(item_pair.lower())
+        norm_item_pair_scores[chars] = np.float32(norm_scores[idx])
 
-
-    if item_scale == 'linear':
-        item_pair_min = np.float32(item_pair_df['score'].min())
-        item_pair_max = np.float32(item_pair_df['score'].max())
-    for _, row in item_pair_df.iterrows():
-        item_pair_score = row['score']
-        # Linear transform scores
-        if item_scale == 'linear':
-            norm_item_pair_score = np.float32((item_pair_score - item_pair_min) / (item_pair_max - item_pair_min))
-        # Log transform scores with
-        elif item_scale == 'log10':
-            if item_pair_score > 0:
-                norm_item_pair_score = np.float32(np.log10(item_pair_score))
-            else:
-                norm_item_pair_score = np.float32(np.log10(item_pair_min))
-        
-        norm_item_pair_scores[row['item_pair']] = norm_item_pair_score
-    
     #-------------------------------------------------------------------------
     # Create normalized position scores dictionary
     #-------------------------------------------------------------------------
     norm_position_scores = {}
-    position_min = np.float32(position_df['score'].min())
-    position_max = np.float32(position_df['score'].max())
-    for _, row in position_df.iterrows():
-        position_score = row['score']
-        # Linear transform scores
-        if position_scale == 'linear':
-            norm_position_score = np.float32((position_score - position_min) / 
-                                             (position_max - position_min))
-        # Log transform scores with
-        elif position_scale == 'log10':
-            if position_score > 0:
-                norm_position_score = np.float32(np.log10(position_score))
-            else:
-                norm_position_score = np.float32(np.log10(position_min))
-        
-        norm_position_scores[row['position']] = norm_position_score
+    scores = position_df['score'].values
+    norm_scores = detect_and_normalize_distribution(scores, 'Position scores')
+    print("Original position scores:", min(scores), "to", max(scores))
+    print("Normalized position scores:", min(norm_scores), "to", max(norm_scores))
+    
+    for idx, row in position_df.iterrows():
+        norm_position_scores[row['position'].lower()] = np.float32(norm_scores[idx])
         
     #-------------------------------------------------------------------------
     # Create normalized position-pair scores dictionary
     #-------------------------------------------------------------------------
     norm_position_pair_scores = {}
-    position_pair_min = np.float32(position_pair_df['score'].min())
-    position_pair_max = np.float32(position_pair_df['score'].max())
+    scores = position_pair_df['score'].values
+    norm_scores = detect_and_normalize_distribution(scores, 'Position pair scores')
+    print("Original position pair scores:", min(scores), "to", max(scores))
+    print("Normalized position pair scores:", min(norm_scores), "to", max(norm_scores))
+    
+    for idx, row in position_pair_df.iterrows():
+        chars = tuple(c.lower() for c in row['position_pair'])
+        norm_position_pair_scores[chars] = np.float32(norm_scores[idx])
 
-    for _, row in position_pair_df.iterrows():
-        position_pair_score = row['score']
-        # Linear transform scores
-        if position_scale == 'linear':
-            norm_position_pair_score = np.float32((position_pair_score - position_pair_min) / 
-                                                  (position_pair_max - position_pair_min))
-        # Log transform scores with
-        elif position_scale == 'log10':
-            if position_pair_score > 0:
-                norm_position_pair_score = np.float32(np.log10(position_pair_score))
-            else:
-                norm_position_pair_score = np.float32(np.log10(position_pair_min))
-        
-        norm_position_pair_scores[row['position_pair']] = norm_position_pair_score
-        
+    #print("\nScore ranges after normalization:")
+    #print(f"Item scores: [{min(norm_item_scores.values()):.4f}, {max(norm_item_scores.values()):.4f}]")
+    #print(f"Item pair scores: [{min(norm_item_pair_scores.values()):.4f}, {max(norm_item_pair_scores.values()):.4f}]")
+    #print(f"Position scores: [{min(norm_position_scores.values()):.4f}, {max(norm_position_scores.values()):.4f}]")
+    #print(f"Position pair scores: [{min(norm_position_pair_scores.values()):.4f}, {max(norm_position_pair_scores.values()):.4f}]")
 
     return norm_item_scores, norm_item_pair_scores, norm_position_scores, norm_position_pair_scores
-    
+   
 def validate_mapping(mapping: np.ndarray, constrained_item_indices: set, constrained_positions: set) -> bool:
     """Validate that mapping follows all constraints."""
     for idx in constrained_item_indices:
@@ -768,48 +776,42 @@ def calculate_layout_score(
     item_weight: float,
     item_pair_weight: float
 ) -> tuple:
-    """
-    Calculate layout score with safe array comparisons.
-    """
-    # Check if we have any valid positions
-    has_valid = False
-    for i in range(len(item_indices)):
-        if item_indices[i] >= 0:
-            has_valid = True
-            break
-    
-    if not has_valid:
-        return 0.0, 0.0, 0.0
+    """Calculate layout score for normalized [0,1] scores."""
+    if not np.any(item_indices >= 0):
+        return -1.0, 0.0, 0.0
         
-    # Calculate single-item component
+    # Single-item component - no special normalization needed since scores are [0,1]
     item_component = np.float32(0.0)
+    valid_count = 0
     for i in range(len(item_indices)):
         pos = item_indices[i]
         if pos >= 0:
             item_component += position_score_matrix[pos, pos] * item_scores[i]
+            valid_count += 1
     
-    # Calculate item_pair component
+    item_component = item_component / valid_count if valid_count > 0 else 0.0
+    
+    # Item-pair component
     item_pair_component = np.float32(0.0)
+    pair_count = 0
     for i in range(len(item_indices)):
         pos1 = item_indices[i]
         if pos1 >= 0:
             for j in range(i + 1, len(item_indices)):
                 pos2 = item_indices[j]
                 if pos2 >= 0:
-                    position_seq1 = position_score_matrix[pos1, pos2]
-                    score_seq1 = item_pair_score_matrix[i, j]
-                    position_seq2 = position_score_matrix[pos2, pos1]
-                    score_seq2 = item_pair_score_matrix[j, i]
-                    item_pair_component += (position_seq1 * score_seq1 + position_seq2 * score_seq2)
-    
-    # Return unweighted components and total weighted score
-    norm_item_pair_component = item_pair_component / 2.0
-    weighted_item = item_component * item_weight
-    weighted_item_pair = norm_item_pair_component * item_pair_weight
-    total_score = weighted_item + weighted_item_pair
-    
-    return float(total_score), float(item_component), float(norm_item_pair_component)
+                    # Simple sum of products since all scores are [0,1]
+                    score = (position_score_matrix[pos1, pos2] * item_pair_score_matrix[i, j] +
+                            position_score_matrix[pos2, pos1] * item_pair_score_matrix[j, i])
+                    item_pair_component += score
+                    pair_count += 2
 
+    item_pair_component = item_pair_component / pair_count if pair_count > 0 else 0.0
+    
+    return (float(item_weight * item_component + item_pair_weight * item_pair_component),
+            float(item_component),
+            float(item_pair_component))
+            
 @jit(nopython=True, fastmath=True)
 def calculate_upper_bound(
     mapping: np.ndarray,
@@ -828,11 +830,8 @@ def calculate_upper_bound(
         mapping, position_score_matrix, item_scores, item_pair_score_matrix, item_weight, item_pair_weight
     )
     
-    # Total number of items
-    n_total_items = len(mapping)  
-
     # Return the current score if there are no remaining items
-    n_remaining_items = n_total_items - depth
+    n_remaining_items = len(mapping) - depth
     if n_remaining_items == 0:
         return current_score
         
@@ -847,7 +846,11 @@ def calculate_upper_bound(
     # Item scoring component
     #-------------------------------------------------------------------------
     # Get single-item position scores (from diagonal)
-    position_single_scores = np.diagonal(position_score_matrix)[available_positions]
+    # numba doesn't accept np.diagonal
+    #position_single_scores = np.diagonal(position_score_matrix)[available_positions]
+    position_single_scores = np.zeros(len(available_positions))
+    for i, pos in enumerate(available_positions):
+        position_single_scores[i] = position_score_matrix[pos, pos]
     position_single_scores = np.sort(position_single_scores)[-n_remaining_items:][::-1]  # highest to lowest
 
     # Get scores for unassigned items
@@ -855,7 +858,7 @@ def calculate_upper_bound(
     remaining_scores = np.sort(remaining_scores)[::-1]  # highest to lowest
     
     # Maximum possible item score contribution (unweighted)
-    max_item_component = np.sum(position_single_scores * remaining_scores)
+    max_item_component = np.sum(position_single_scores * remaining_scores) / len(mapping)
     
     #-------------------------------------------------------------------------
     # Item-pair scoring component
@@ -893,28 +896,35 @@ def calculate_upper_bound(
     
     # Match best pairs
     n_pairs = min(len(position_pair_scores), len(item_pair_scores))
-    unassigned_score = np.sum(position_pair_scores[:n_pairs] * item_pair_scores[:n_pairs])
+    n_total_items = len(mapping)
+    total_possible_pairs = n_total_items * (n_total_items - 1)  # *2 for bidirectional
+    
+    # Match best pairs (normalized)
+    unassigned_score = np.sum(position_pair_scores[:n_pairs] * item_pair_scores[:n_pairs]) / total_possible_pairs
 
     #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
     # 2. Assigned-to-unassigned item_pairs
     #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+    # Assigned-to-unassigned scores (normalized)
     assigned_unassigned_score = 0.0
+    n_assigned_unassigned_pairs = 0
     for i in assigned:
         pos_i = mapping[i]
         for j in unassigned:
-            # Get maximum score in either direction
             score = max(item_pair_score_matrix[i, j],
                         item_pair_score_matrix[j, i])
             
-            # Find best available position score
             best_position = 0.0
             for pos_j in available_positions:
                 position = max(position_score_matrix[pos_i, pos_j],
                                position_score_matrix[pos_j, pos_i])
                 best_position = max(best_position, position)
             
-            # Add contribution with proper normalization
             assigned_unassigned_score += (best_position * score)
+            n_assigned_unassigned_pairs += 2  # Count both directions
+    
+    if n_assigned_unassigned_pairs > 0:
+        assigned_unassigned_score /= total_possible_pairs
 
     max_item_pair_component = unassigned_score + assigned_unassigned_score
         
@@ -973,7 +983,7 @@ def branch_and_bound_optimal(
         - List of (score, mapping, detailed_scores) tuples
         - Total number of permutations processed
     """
-     # Get items and positions from config
+    # Get items and positions from config
     items_to_assign = config['optimization']['items_to_assign']
     positions_to_assign = config['optimization']['positions_to_assign']
     items_to_constrain = config['optimization'].get('items_to_constrain', '')
@@ -1055,7 +1065,16 @@ def branch_and_bound_optimal(
     phase1_solutions = []
     phase1_candidates = [HeapItem(initial_score, 0, initial_mapping, initial_used)]  # Use positive score
     
-    print("\nPhase 1: Arranging constrained items...")
+    #print("\nPhase 1: Arranging constrained items...")
+
+    # Track pruning
+    pruning_stats = {
+        'depth': defaultdict(int),  # Count pruned branches by depth
+        'margin': [],               # Track pruning margins (diff between upper bound and worst score)
+        'total_pruned': 0,
+        'total_explored': 0
+    }
+
     with tqdm(total=total_perms_phase1, desc="Phase 1", unit='perms') as pbar:
         while phase1_candidates:
             candidate = heapq.heappop(phase1_candidates)
@@ -1090,7 +1109,7 @@ def branch_and_bound_optimal(
     #-------------------------------------------------------------------------
     # Phase 2: For each Phase 1 solution, arrange remaining items
     #-------------------------------------------------------------------------
-    print("\nPhase 2: Arranging remaining items...")
+    #print("\nPhase 2: Arranging remaining items...")
     current_phase1_solution_index = 0
 
     with tqdm(total=total_perms_phase2, desc="Phase 2", unit='perms') as pbar:
@@ -1194,11 +1213,14 @@ def branch_and_bound_optimal(
                             item_pair_score_matrix, item_weight, item_pair_weight
                         )
                         
-                        margin = 1e-8 * (1.0 + abs(worst_top_n_score))
-                        
-                        if upper_bound < worst_top_n_score - margin:
+                        margin = upper_bound - (worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps)
+                        if margin < 0:  # We can safely prune
+                            pruning_stats['depth'][depth] += 1
+                            pruning_stats['margin'].append(margin)
+                            pruning_stats['total_pruned'] += 1
                             continue
-                            
+                        pruning_stats['total_explored'] += 1
+
                     heapq.heappush(candidates, HeapItem(new_score, depth + 1, new_mapping, new_used))
 
                 # Memory check with gradual reduction
@@ -1212,7 +1234,6 @@ def branch_and_bound_optimal(
 
     # Convert final solutions
     solutions = []
-    print(f"\nConverting {len(top_n_solutions)} solutions...")
     while top_n_solutions:
         score, _, solution = heapq.heappop(top_n_solutions)
         unweighted_item_score, unweighted_item_pair_score, mapping_list = solution
@@ -1227,6 +1248,21 @@ def branch_and_bound_optimal(
                 'unweighted_item_score': unweighted_item_score
             }}
         ))
+
+    # Print pruning statistics
+    print("\nPruning statistics:")
+    print(f"Total nodes explored: {pruning_stats['total_explored']:,}")
+    print(f"Total branches pruned: {pruning_stats['total_pruned']:,}")
+    print("Pruning by depth:")
+    for depth in sorted(pruning_stats['depth'].keys()):
+        count = pruning_stats['depth'][depth]
+        print(f"  Depth {depth}: {count:,} branches pruned")
+    if pruning_stats['margin']:  # Only if we have margins to report
+        margins = np.array(pruning_stats['margin'])
+        print("Pruning margins:")
+        print(f"  Min: {np.min(margins):.6f}")
+        print(f"  Max: {np.max(margins):.6f}")
+        print(f"  Mean: {np.mean(margins):.6f}")
 
     return list(reversed(solutions)), processed_perms
 
@@ -1251,14 +1287,6 @@ def optimize_layout(config: dict) -> None:
     items_assigned = items_assigned.lower()
     positions_assigned = positions_assigned.upper()
 
-    print("\nConfiguration:")
-    print(f"items to assign: {items_to_assign}")
-    print(f"available positions: {positions_to_assign}")
-    print(f"items to constrain: {items_to_constrain}")
-    print(f"constraining positions: {positions_to_constrain}")
-    print(f"items assigned: {items_assigned}")
-    print(f"filled positions: {positions_assigned}")
-    
     # Validate configuration
     validate_config(config)
     
@@ -1272,15 +1300,20 @@ def optimize_layout(config: dict) -> None:
         positions_assigned=set(positions_assigned)
     )
     
+    print("\nConfiguration:")
+    print(f"{len(items_to_assign)} items to assign: {items_to_assign}")
+    print(f"{len(positions_to_assign)} available positions: {positions_to_assign}")
+    print(f"{len(items_to_constrain)} items to constrain: {items_to_constrain}")
+    print(f"{len(positions_to_constrain)} constraining positions: {positions_to_constrain}")
+    print(f"{len(items_assigned)} items already assigned: {items_assigned}")
+    print(f"{len(positions_assigned)} filled positions: {positions_assigned}")
+    
     # Print detailed search space analysis
-    print("\nSearch space analysis:")
+    print("\nSearch space:")
     if search_space['phase1_arrangements'] > 1:
-        print(f"Phase 1 (constrained items): {search_space['phase1_arrangements']:,} permutations")
-        print(f"Phase 2 (per Phase 1 solution): {search_space['details']['arrangements_per_phase1']:,} permutations")
+        print(f"Phase 1 ({search_space['details']['constrained_items']} items constrained to {search_space['details']['constrained_positions']} positions): {search_space['phase1_arrangements']:,} permutations")
+        print(f"Phase 2 ({search_space['details']['remaining_items']} items to arrange in {search_space['details']['remaining_positions']} positions): {search_space['details']['arrangements_per_phase1']:,} permutations per Phase 1 solution")
         print(f"Total permutations: {search_space['total_perms']:,}")
-        print(f"\nConstraint details:")
-        print(f"- {search_space['details']['constrained_items']} items constrained to {search_space['details']['constrained_positions']} positions")
-        print(f"- {search_space['details']['remaining_items']} items to arrange in {search_space['details']['remaining_positions']} positions")
     else:
         print("No constraints - running single-phase optimization")
         print(f"Total permutations: {search_space['total_perms']:,}")
@@ -1288,6 +1321,7 @@ def optimize_layout(config: dict) -> None:
 
     # Show initial positionboard
     if print_keyboard:
+        print("\n")
         visualize_keyboard_layout(
             mapping=None,
             title="positions to optimize",
@@ -1297,6 +1331,7 @@ def optimize_layout(config: dict) -> None:
         )
         
     # Load and normalize scores
+    print("\Normalization of scores:")
     norm_item_scores, norm_item_pair_scores, norm_position_scores, norm_position_pair_scores = load_and_normalize_scores(config)
     
     # Get scoring weights
@@ -1313,7 +1348,7 @@ def optimize_layout(config: dict) -> None:
     # Get number of layouts from config
     n_layouts = config['optimization'].get('nlayouts', 5)
     
-    print("\nStarting optimization with:")
+    print("\nStarting Phase 1 optimization with:")
     print(f"- {len(items_to_constrain)} constrained items: {items_to_constrain}")
     print(f"- {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
     print(f"- Finding top {n_layouts} solutions")
@@ -1351,19 +1386,11 @@ def optimize_layout(config: dict) -> None:
 
     # Final statistics reporting
     elapsed_time = time.time() - start_time
-    print(f"\nSearch completion summary:")
-    print(f"Total permutations processed: {processed_perms:,}")
     if processed_perms >= search_space['total_perms']:
-        print("Search completed: 100% of solution space explored")
+        print(f"Total permutations processed: {processed_perms:,} (100% of solution space explored) in {timedelta(seconds=int(elapsed_time))}")
     else:
         percent_explored = (processed_perms / search_space['total_perms']) * 100
-        print(f"Search completed: {percent_explored:.1f}% of solution space explored")
-    print(f"Total runtime: {timedelta(seconds=int(elapsed_time))}")
-    
-    # Add performance statistics
-    if elapsed_time > 0:
-        perms_per_second = processed_perms / elapsed_time
-        print(f"Average performance: {perms_per_second:,.0f} permutations/second")
+        print(f"Total permutations processed: {processed_perms:,} ({percent_explored:.1f}% of solution space explored) in {timedelta(seconds=int(elapsed_time))}")
 
 #--------------------------------------------------------------------
 # Pipeline
@@ -1379,7 +1406,7 @@ if __name__ == "__main__":
         optimize_layout(config)
 
         elapsed = time.time() - start_time
-        print(f"Done! Total runtime: {timedelta(seconds=int(elapsed))}")
+        print(f"Total runtime: {timedelta(seconds=int(elapsed))}")
 
     except Exception as e:
         print(f"Error: {e}")
