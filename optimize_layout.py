@@ -35,20 +35,15 @@ def load_config(config_path: str = "config.yaml") -> dict:
         config = yaml.safe_load(f)
 
     # Create necessary output directories
-    output_dirs = [
-        config['paths']['output']['layout_results_folder']
-    ]
+    output_dirs = [config['paths']['output']['layout_results_folder']]
     for directory in output_dirs:
         os.makedirs(directory, exist_ok=True)
-        print(f"Ensuring directory exists: {directory}")
 
     # Convert weights to float32
     config['optimization']['scoring']['item_weight'] = np.float32(
-        config['optimization']['scoring']['item_weight']
-    )
+        config['optimization']['scoring']['item_weight'])
     config['optimization']['scoring']['item_pair_weight'] = np.float32(
-        config['optimization']['scoring']['item_pair_weight']
-    )
+        config['optimization']['scoring']['item_pair_weight'])
     
     # Normalize strings to lowercase with consistent access pattern
     optimization = config['optimization']
@@ -60,7 +55,34 @@ def load_config(config_path: str = "config.yaml") -> dict:
     
     # Validate constraints
     validate_config(config)
-    
+
+    items_to_assign = config['optimization']['items_to_assign']
+    positions_to_assign = config['optimization']['positions_to_assign']
+    items_to_constrain = config['optimization'].get('items_to_constrain', '')
+    positions_to_constrain = config['optimization'].get('positions_to_constrain', '')
+    items_assigned = config['optimization'].get('items_assigned', '')
+    positions_assigned = config['optimization'].get('positions_assigned', '')
+    item_weight = config['optimization']['scoring']['item_weight']
+    item_pair_weight = config['optimization']['scoring']['item_pair_weight']
+
+    # Convert to lowercase/uppercase for consistency
+    items_to_assign = items_to_assign.lower()
+    positions_to_assign = positions_to_assign.upper()
+    items_to_constrain = items_to_constrain.lower()
+    positions_to_constrain = positions_to_constrain.upper()
+    items_assigned = items_assigned.lower()
+    positions_assigned = positions_assigned.upper()
+
+    print("\nConfiguration:")
+    print(f"{len(items_to_assign)} items to assign: {items_to_assign}")
+    print(f"{len(positions_to_assign)} available positions: {positions_to_assign}")
+    print(f"{len(items_to_constrain)} items to constrain: {items_to_constrain}")
+    print(f"{len(positions_to_constrain)} constraining positions: {positions_to_constrain}")
+    print(f"{len(items_assigned)} items already assigned: {items_assigned}")
+    print(f"{len(positions_assigned)} filled positions: {positions_assigned}")
+    print(f"Item weight: {item_weight}")
+    print(f"Item-pair weight: {item_pair_weight}")
+
     return config
 
 def validate_config(config):
@@ -251,8 +273,8 @@ def load_and_normalize_scores(config: dict):
     norm_item_scores = {}
     scores = item_df['score'].values
     norm_scores = detect_and_normalize_distribution(scores, 'Item scores')
-    print("Original item scores:", min(scores), "to", max(scores))
-    print("Normalized item scores:", min(norm_scores), "to", max(norm_scores))
+    print("  - original:", min(scores), "to", max(scores))
+    print("  - normalized:", min(norm_scores), "to", max(norm_scores))
     for idx, row in item_df.iterrows():
         norm_item_scores[row['item'].lower()] = np.float32(norm_scores[idx])
         
@@ -262,8 +284,8 @@ def load_and_normalize_scores(config: dict):
     norm_item_pair_scores = {}
     scores = item_pair_df['score'].values
     norm_scores = detect_and_normalize_distribution(scores, 'Item pair scores')
-    print("Original item pair scores:", min(scores), "to", max(scores))
-    print("Normalized item pair scores:", min(norm_scores), "to", max(norm_scores))
+    print("  - original:", min(scores), "to", max(scores))
+    print("  - normalized:", min(norm_scores), "to", max(norm_scores))
     for idx, row in item_pair_df.iterrows():
         item_pair = row['item_pair']
         if not isinstance(item_pair, str):
@@ -278,8 +300,8 @@ def load_and_normalize_scores(config: dict):
     norm_position_scores = {}
     scores = position_df['score'].values
     norm_scores = detect_and_normalize_distribution(scores, 'Position scores')
-    print("Original position scores:", min(scores), "to", max(scores))
-    print("Normalized position scores:", min(norm_scores), "to", max(norm_scores))
+    print("  - original:", min(scores), "to", max(scores))
+    print("  - normalized:", min(norm_scores), "to", max(norm_scores))
     
     for idx, row in position_df.iterrows():
         norm_position_scores[row['position'].lower()] = np.float32(norm_scores[idx])
@@ -290,8 +312,8 @@ def load_and_normalize_scores(config: dict):
     norm_position_pair_scores = {}
     scores = position_pair_df['score'].values
     norm_scores = detect_and_normalize_distribution(scores, 'Position pair scores')
-    print("Original position pair scores:", min(scores), "to", max(scores))
-    print("Normalized position pair scores:", min(norm_scores), "to", max(norm_scores))
+    print("  - original:", min(scores), "to", max(scores))
+    print("  - normalized:", min(norm_scores), "to", max(norm_scores))
     
     for idx, row in position_pair_df.iterrows():
         chars = tuple(c.lower() for c in row['position_pair'])
@@ -895,12 +917,10 @@ def calculate_upper_bound(
     item_pair_scores = np.sort(item_pair_scores)[::-1]
     
     # Match best pairs
+    # The unassigned pairs loop only does the upper triangle (i,j) not (j,i), 
+    # so each pair is counted once in idx, and the score is normalized by n_pairs:
     n_pairs = min(len(position_pair_scores), len(item_pair_scores))
-    n_total_items = len(mapping)
-    total_possible_pairs = n_total_items * (n_total_items - 1)  # *2 for bidirectional
-    
-    # Match best pairs (normalized)
-    unassigned_score = np.sum(position_pair_scores[:n_pairs] * item_pair_scores[:n_pairs]) / total_possible_pairs
+    unassigned_score = np.sum(position_pair_scores[:n_pairs] * item_pair_scores[:n_pairs]) / n_pairs
 
     #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
     # 2. Assigned-to-unassigned item_pairs
@@ -920,11 +940,15 @@ def calculate_upper_bound(
                                position_score_matrix[pos_j, pos_i])
                 best_position = max(best_position, position)
             
-            assigned_unassigned_score += (best_position * score)
+            # The assigned-unassigned loop does all combinations, 
+            # multiplies the score by 2 for both directions,
+            # and explicitly counts each direction by incrementing by 2:
+            assigned_unassigned_score += 2 * (best_position * score)
             n_assigned_unassigned_pairs += 2  # Count both directions
-    
+
+    # Normalize by the number of pairs
     if n_assigned_unassigned_pairs > 0:
-        assigned_unassigned_score /= total_possible_pairs
+        assigned_unassigned_score /= n_assigned_unassigned_pairs
 
     max_item_pair_component = unassigned_score + assigned_unassigned_score
         
@@ -1300,14 +1324,6 @@ def optimize_layout(config: dict) -> None:
         positions_assigned=set(positions_assigned)
     )
     
-    print("\nConfiguration:")
-    print(f"{len(items_to_assign)} items to assign: {items_to_assign}")
-    print(f"{len(positions_to_assign)} available positions: {positions_to_assign}")
-    print(f"{len(items_to_constrain)} items to constrain: {items_to_constrain}")
-    print(f"{len(positions_to_constrain)} constraining positions: {positions_to_constrain}")
-    print(f"{len(items_assigned)} items already assigned: {items_assigned}")
-    print(f"{len(positions_assigned)} filled positions: {positions_assigned}")
-    
     # Print detailed search space analysis
     print("\nSearch space:")
     if search_space['phase1_arrangements'] > 1:
@@ -1331,7 +1347,7 @@ def optimize_layout(config: dict) -> None:
         )
         
     # Load and normalize scores
-    print("\Normalization of scores:")
+    print("\nNormalization of scores:")
     norm_item_scores, norm_item_pair_scores, norm_position_scores, norm_position_pair_scores = load_and_normalize_scores(config)
     
     # Get scoring weights
@@ -1348,10 +1364,10 @@ def optimize_layout(config: dict) -> None:
     # Get number of layouts from config
     n_layouts = config['optimization'].get('nlayouts', 5)
     
-    print("\nStarting Phase 1 optimization with:")
-    print(f"- {len(items_to_constrain)} constrained items: {items_to_constrain}")
-    print(f"- {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
-    print(f"- Finding top {n_layouts} solutions")
+    print("\nStarting Phase 1 optimization to find top {n_layouts} solutions:")
+    print(f"  - {len(items_to_constrain)} constrained items: {items_to_constrain}")
+    print(f"  - {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
+    print(f"  - Finding top {n_layouts} solutions")
 
     # Run optimization
     weights = (item_weight, item_pair_weight)
