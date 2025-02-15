@@ -253,69 +253,76 @@ def detect_and_normalize_distribution(scores: np.ndarray, name: str = '') -> np.
 
 def load_and_normalize_scores(config: dict):
     """Load and normalize scores."""
-    # Load raw data
-    item_df = pd.read_csv(config['paths']['input']['item_scores_file'])
-    item_pair_df = pd.read_csv(config['paths']['input']['item_pair_scores_file'])
-    position_df = pd.read_csv(config['paths']['input']['position_scores_file'])
-    position_pair_df = pd.read_csv(config['paths']['input']['position_pair_scores_file'])
-    
-    #-------------------------------------------------------------------------
-    # Create normalized item scores dictionary 
-    #-------------------------------------------------------------------------
+    item_weight = config['optimization']['scoring']['item_weight']
+    item_pair_weight = config['optimization']['scoring']['item_pair_weight']
+
     norm_item_scores = {}
-    scores = item_df['score'].values
-    norm_scores = detect_and_normalize_distribution(scores, 'Item scores')
-    print("  - original:", min(scores), "to", max(scores))
-    print("  - normalized:", min(norm_scores), "to", max(norm_scores))
-    for idx, row in item_df.iterrows():
-        norm_item_scores[row['item'].lower()] = np.float32(norm_scores[idx])
-        
-    #-------------------------------------------------------------------------
-    # Create normalized item-pair scores dictionary 
-    #-------------------------------------------------------------------------
     norm_item_pair_scores = {}
-    scores = item_pair_df['score'].values
-    norm_scores = detect_and_normalize_distribution(scores, 'Item pair scores')
-    print("  - original:", min(scores), "to", max(scores))
-    print("  - normalized:", min(norm_scores), "to", max(norm_scores))
-    for idx, row in item_pair_df.iterrows():
-        item_pair = row['item_pair']
-        if not isinstance(item_pair, str):
-            print(f"Warning: non-string item_pair at index {idx}: {item_pair} of type {type(item_pair)}")
-            continue
-        chars = tuple(item_pair.lower())
-        norm_item_pair_scores[chars] = np.float32(norm_scores[idx])
+    norm_position_scores = {}
+    norm_position_pair_scores = {}
 
     #-------------------------------------------------------------------------
-    # Create normalized position scores dictionary
+    # Load position scores (always needed since used for both components)
     #-------------------------------------------------------------------------
-    norm_position_scores = {}
+    position_df = pd.read_csv(config['paths']['input']['position_scores_file'], 
+                              dtype={'item_pair': str})
     scores = position_df['score'].values
     norm_scores = detect_and_normalize_distribution(scores, 'Position scores')
+    print("Position scores:")
     print("  - original:", min(scores), "to", max(scores))
     print("  - normalized:", min(norm_scores), "to", max(norm_scores))
     
     for idx, row in position_df.iterrows():
         norm_position_scores[row['position'].lower()] = np.float32(norm_scores[idx])
-        
-    #-------------------------------------------------------------------------
-    # Create normalized position-pair scores dictionary
-    #-------------------------------------------------------------------------
-    norm_position_pair_scores = {}
-    scores = position_pair_df['score'].values
-    norm_scores = detect_and_normalize_distribution(scores, 'Position pair scores')
-    print("  - original:", min(scores), "to", max(scores))
-    print("  - normalized:", min(norm_scores), "to", max(norm_scores))
-    
-    for idx, row in position_pair_df.iterrows():
-        chars = tuple(c.lower() for c in row['position_pair'])
-        norm_position_pair_scores[chars] = np.float32(norm_scores[idx])
 
-    #print("\nScore ranges after normalization:")
-    #print(f"Item scores: [{min(norm_item_scores.values()):.4f}, {max(norm_item_scores.values()):.4f}]")
-    #print(f"Item pair scores: [{min(norm_item_pair_scores.values()):.4f}, {max(norm_item_pair_scores.values()):.4f}]")
-    #print(f"Position scores: [{min(norm_position_scores.values()):.4f}, {max(norm_position_scores.values()):.4f}]")
-    #print(f"Position pair scores: [{min(norm_position_pair_scores.values()):.4f}, {max(norm_position_pair_scores.values()):.4f}]")
+    #-------------------------------------------------------------------------
+    # Load item scores if item_weight > 0
+    #-------------------------------------------------------------------------
+    if item_weight > 0:
+        print("\nLoading item scores...")
+        item_df = pd.read_csv(config['paths']['input']['item_scores_file'], 
+                              dtype={'item_pair': str})
+        scores = item_df['score'].values
+        norm_scores = detect_and_normalize_distribution(scores, 'Item scores')
+        print("  - original:", min(scores), "to", max(scores))
+        print("  - normalized:", min(norm_scores), "to", max(norm_scores))
+        
+        for idx, row in item_df.iterrows():
+            norm_item_scores[row['item'].lower()] = np.float32(norm_scores[idx])
+    
+    #-------------------------------------------------------------------------
+    # Load pair scores if item_pair_weight > 0
+    #-------------------------------------------------------------------------
+    if item_pair_weight > 0:
+        # Load item pair scores
+        print("\nLoading item pair scores...")
+        item_pair_df = pd.read_csv(config['paths']['input']['item_pair_scores_file'], 
+                                   dtype={'item_pair': str})
+        scores = item_pair_df['score'].values
+        norm_scores = detect_and_normalize_distribution(scores, 'Item pair scores')
+        print("  - original:", min(scores), "to", max(scores))
+        print("  - normalized:", min(norm_scores), "to", max(norm_scores))
+        
+        for idx, row in item_pair_df.iterrows():
+            item_pair = row['item_pair']
+            if not isinstance(item_pair, str):
+                print(f"Warning: non-string item_pair at index {idx}: {item_pair} of type {type(item_pair)}")
+                continue
+            chars = tuple(item_pair.lower())
+            norm_item_pair_scores[chars] = np.float32(norm_scores[idx])
+
+        # Load position pair scores
+        print("\nLoading position pair scores...")
+        position_pair_df = pd.read_csv(config['paths']['input']['position_pair_scores_file'], 
+                                       dtype={'item_pair': str})
+        scores = position_pair_df['score'].values
+        norm_scores = detect_and_normalize_distribution(scores, 'Position pair scores')
+        print("  - original:", min(scores), "to", max(scores))
+        print("  - normalized:", min(norm_scores), "to", max(norm_scores))
+        
+        for idx, row in position_pair_df.iterrows():
+            chars = tuple(c.lower() for c in row['position_pair'])
+            norm_position_pair_scores[chars] = np.float32(norm_scores[idx])
 
     return norm_item_scores, norm_item_pair_scores, norm_position_scores, norm_position_pair_scores
    
@@ -361,8 +368,8 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
         writer.writerow(['Constraint positions', escape_special_chars(opt.get('positions_to_constrain', ''))])
         writer.writerow(['Assigned items', escape_special_chars(opt.get('items_assigned', ''))])
         writer.writerow(['Assigned positions', escape_special_chars(opt.get('positions_assigned', ''))])
-        writer.writerow(['Item-pair weight', opt['scoring']['item_pair_weight']])
         writer.writerow(['Item weight', opt['scoring']['item_weight']])
+        writer.writerow(['Item-pair weight', opt['scoring']['item_pair_weight']])
         writer.writerow([])  # Empty row for separation
         
         # Write results header
@@ -371,8 +378,8 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
             'Positions',
             'Rank',
             'Total score',
-            'Item-pair score (unweighted)',
-            'Item score (unweighted)'
+            'Item score (unweighted)',
+            'Item-pair score (unweighted)'
         ])
         
         # Write results
@@ -389,9 +396,9 @@ def save_results_to_csv(results: List[Tuple[float, Dict[str, str], Dict[str, dic
                 arrangement,
                 positions,    
                 rank,
-                f"{score:.4f}",
-                f"{unweighted_item_pair_score:.4f}",
-                f"{unweighted_item_score:.4f}"
+                f"{score:.6f}",
+                f"{unweighted_item_score:.6f}",
+                f"{unweighted_item_pair_score:.6f}"
             ])
     
     print(f"\nResults saved to: {output_path}")
@@ -577,9 +584,13 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
     if n is None:
         n = config['optimization'].get('nlayouts', 5)
     
-    print(f"\nTop {n} scoring layouts:")
+    if len(results) > 1:
+        print(f"\nTop {n} scoring layouts:")
+    else:
+        print(f"\nTop-scoring layout:")
+
     for i, (score, mapping, detailed_scores) in enumerate(results[:n], 1):
-        print(f"\n#{i}: Score: {score:.4f}")
+        print(f"\n#{i}: Score: {score:.6f}")
 
         if print_keyboard:
             visualize_keyboard_layout(
@@ -617,39 +628,38 @@ def calculate_score(
     Returns:
         tuple of (total_score, item_component, pair_component)
     """
-    # Handle empty/invalid case
-    if not np.any(mapping >= 0):
-        return (-1.0, 0.0, 0.0)
-    
-    # Calculate item score component
     item_component = np.float32(0.0)
-    valid_count = 0
-    for i in range(len(mapping)):
-        pos = mapping[i]
-        if pos >= 0:
-            item_component += position_score_matrix[pos, pos] * item_scores[i]
-            valid_count += 1
-    
-    # Normalize by number of placed items
-    item_component = item_component / valid_count if valid_count > 0 else 0.0
-    
-    # Calculate item-pair component
     item_pair_component = np.float32(0.0)
-    pair_count = 0
-    for i in range(len(mapping)):
-        pos1 = mapping[i]
-        if pos1 >= 0:
-            for j in range(i + 1, len(mapping)):
-                pos2 = mapping[j]
-                if pos2 >= 0:
-                    # Score both directions and add to total
-                    score = (position_score_matrix[pos1, pos2] * item_pair_score_matrix[i, j] +
-                             position_score_matrix[pos2, pos1] * item_pair_score_matrix[j, i])
-                    item_pair_component += score
-                    pair_count += 2  # Count both directions
+    
+    # Only calculate item component if weight > 0
+    if item_weight > 0:
+        valid_count = 0
+        for i in range(len(mapping)):
+            pos = mapping[i]
+            if pos >= 0:
+                item_component += position_score_matrix[pos, pos] * item_scores[i]
+                valid_count += 1
+        
+        # Normalize by number of placed items
+        item_component = item_component / valid_count if valid_count > 0 else 0.0
+    
+    # Only calculate pair component if weight > 0    
+    if item_pair_weight > 0:
+        pair_count = 0
+        for i in range(len(mapping)):
+            pos1 = mapping[i]
+            if pos1 >= 0:
+                for j in range(i + 1, len(mapping)):
+                    pos2 = mapping[j]
+                    if pos2 >= 0:
+                        # Score both directions and add to total
+                        score = (position_score_matrix[pos1, pos2] * item_pair_score_matrix[i, j] +
+                                 position_score_matrix[pos2, pos1] * item_pair_score_matrix[j, i])
+                        item_pair_component += score
+                        pair_count += 2  # Count both directions
 
-    # Normalize pair score by number of pairs
-    item_pair_component = item_pair_component / pair_count if pair_count > 0 else 0.0
+        # Normalize pair score by number of pairs
+        item_pair_component = item_pair_component / pair_count if pair_count > 0 else 0.0
     
     # Calculate weighted total
     total_score = float(item_weight * item_component + item_pair_weight * item_pair_component)
@@ -681,29 +691,47 @@ def calculate_upper_bound(
         item_pair_score_matrix: Matrix of item-pair scores
         item_weight: Weight for item score component
         item_pair_weight: Weight for item-pair score component
-        best_score: Current best score (used for early pruning in single-solution mode)
+        best_score: Current best score (used for pruning in single-solution mode)
         single_solution: If True, use aggressive pruning optimized for single solution
         depth: Search depth (only used in multi-solution mode)
     
     Returns:
         Upper bound on best possible score from this node
     """
+    debug_print = False
+
     # Get current score from placed items
     current_score, current_unweighted_item_score, current_unweighted_item_pair_score = calculate_score(
         mapping, position_score_matrix, item_scores, 
         item_pair_score_matrix, item_weight, item_pair_weight
     )
     
+    if debug_print and depth is not None and depth < 2:
+        print("\nUPPER BOUND CALCULATION:")
+        print("    Current mapping:", mapping)
+        print("    Current scores:")
+        print("      Item score: ", current_unweighted_item_score)
+        print("      Pair score: ", current_unweighted_item_pair_score)
+
+    # Quick rejection check with floating point margin
     if single_solution:
-        # Quick rejection check for single-solution mode 
-        # (maximum possible additional score contribution)
-        if current_score + item_weight + item_pair_weight <= best_score:
+        # (1 is the maximum possible contribution for each normalized score)
+        margin = ((current_unweighted_item_score + 1) * item_weight + 
+                  (current_unweighted_item_pair_score + 1) * item_pair_weight) - \
+                 (best_score - np.abs(best_score) * np.finfo(np.float32).eps)
+        if margin <= 0:
+            if debug_print and depth is not None and depth < 2:
+                print("    Quick rejection: True")
             return -np.inf
 
     # Find unplaced items and available positions
     unplaced = np.where(mapping < 0)[0]
     available = np.where(~used)[0]
     
+    if debug_print and depth is not None and depth < 2:
+        print("    Unplaced items:", unplaced)
+        print("    Available positions:", available)
+
     if len(unplaced) == 0:
         return current_score
         
@@ -722,10 +750,14 @@ def calculate_upper_bound(
     item_values.sort()
     item_values = item_values[::-1]  # Highest to lowest
     
+    if debug_print and depth is not None and depth < 2:
+        print("    Position values:", position_values)
+        print("    Item values:", item_values)
+
     # Maximum possible item component
     len_values = min(len(position_values), len(item_values))
-    max_item_component = np.sum(position_values[:len_values] * item_values[:len_values]) / len(mapping)
-
+    max_item_component = np.sum(position_values[:len_values] * 
+                                item_values[:len_values]) / len(mapping)
     #-------------------------------------------------------------------------
     # Paired-item component
     #-------------------------------------------------------------------------
@@ -735,15 +767,41 @@ def calculate_upper_bound(
     
     # 1. Pairs between placed and unplaced
     placed = np.where(mapping >= 0)[0]
+    
+    if debug_print and depth is not None and depth < 2:
+        print("\n    Detail of pair calculations:")
+        if len(placed) > 0:
+            p_item = placed[0]  # t's index
+            u_item = unplaced[0]  # h's index
+            print("      T-H pair scores:")
+            print("        t->h (item pair):", item_pair_score_matrix[p_item, u_item])
+            print("        h->t (item pair):", item_pair_score_matrix[u_item, p_item])
+            p_pos = mapping[p_item]  # t's position
+            for pos in available:
+                print("\n      Position scores for pos", p_pos, "->", pos, ":")
+                print("        Forward:", position_score_matrix[p_pos, pos])
+                print("        Backward:", position_score_matrix[pos, p_pos])
+                score1 = item_pair_score_matrix[p_item, u_item] * position_score_matrix[p_pos, pos]
+                score2 = item_pair_score_matrix[u_item, p_item] * position_score_matrix[pos, p_pos]
+                print("        Products:")
+                print("          Forward:", score1)
+                print("          Backward:", score2)
+                print("          Sum:", score1 + score2)
+
     for p_item in placed:
         p_pos = mapping[p_item]
         for u_item in unplaced:
-            # Add scores for each pair in both directions
+            # Initialize best_sum before using it in max()
+            best_sum = float('-inf')
             for pos in available:
                 score1 = item_pair_score_matrix[p_item, u_item] * position_score_matrix[p_pos, pos]
                 score2 = item_pair_score_matrix[u_item, p_item] * position_score_matrix[pos, p_pos]
-                max_pair_component += (score1 + score2)
-                n_pairs += 2  # Count both directions
+                current_sum = score1 + score2
+                best_sum = max(best_sum, current_sum)
+                #max_pair_component += (score1 + score2)
+                #n_pairs += 2  # Count both directions
+            max_pair_component += best_sum
+            n_pairs += 2  # Count both directions
     
     # 2. Pairs between unplaced items
     n_unplaced_pairs = len(unplaced) * (len(unplaced) - 1)
@@ -783,34 +841,43 @@ def calculate_upper_bound(
     total_item_score = (current_unweighted_item_score + max_item_component) * item_weight
     total_pair_score = (current_unweighted_item_pair_score + max_pair_component) * item_pair_weight
     combined_score = float(total_item_score + total_pair_score)
+    if debug_print and depth is not None and depth < 2:
+        print("    Max additional:")
+        print("      Item: ", max_item_component)
+        print("      Pair: ", max_pair_component)
+        print("    Final scores:")
+        print("      Total item score:", total_item_score)
+        print("      Total pair score:", total_pair_score)
+        print("      Combined score:", combined_score)
 
     if single_solution:
-        return combined_score if combined_score > best_score else -np.inf
+        margin = combined_score - (best_score - np.abs(best_score) * np.finfo(np.float32).eps)
+        return combined_score if margin > 0 else -np.inf
     else:
         return combined_score
-    
+           
 @jit(nopython=True)
 def get_next_item(
     mapping: np.ndarray,
-    constrained_items: Set[int] = None
+    constrained_items: np.ndarray = None  # Change to numpy array
 ) -> int:
     """
     Get next item to place, prioritizing constrained items if provided.
-    
-    Args:
-        mapping: Array of position indices (-1 for unplaced)
-        constrained_items: Optional set of item indices that must be placed first
-    
-    Returns:
-        Index of next item to place, or -1 if no items left
     """
-    # Handle constrained items first if provided
-    if constrained_items is not None:
-        for item in constrained_items:
+    # Handle no constraints case
+    if constrained_items is None or len(constrained_items) == 0:
+        # Find first unplaced item
+        for item in range(len(mapping)):
             if mapping[item] < 0:
                 return item
-    
-    # Find first unplaced item
+        return -1
+        
+    # Handle constrained items
+    for item in constrained_items:
+        if mapping[item] < 0:
+            return item
+            
+    # If all constrained items placed, find next unplaced item
     for item in range(len(mapping)):
         if mapping[item] < 0:
             return item
@@ -825,115 +892,139 @@ def branch_and_bound_optimal_solution(
     constrained_items: Set[int] = None,
     constrained_positions: Set[int] = None
 ) -> Tuple[float, Dict[str, str], Tuple[float, float], int]:
-    """
-    Find optimal single solution using aggressive pruning.
-
-    Returns:
-        Tuple containing:
-        - best_score: Float score of best solution
-        - result_mapping: Dict mapping items to positions
-        - score_components: Tuple of (item_score, pair_score)
-        - processed_perms: Number of complete permutations processed
-    """
+    """Find optimal single solution using aggressive pruning with debug logging."""
+    debug_print = False
+    
     # Initialize
     n_items = len(items_to_assign)
     n_positions = len(positions_to_assign)
     item_scores, item_pair_score_matrix, position_score_matrix = arrays
     item_weight, item_pair_weight = weights
-
+    
+    # Initialize empty constraints as empty sets instead of None
     if constrained_items is None:
         constrained_items = set()
     if constrained_positions is None:
         constrained_positions = set()
-
+        
+    # Convert sets to numpy arrays for numba compatibility
+    constrained_items_array = np.array(list(constrained_items), dtype=np.int32)
+    constrained_positions_array = np.array(list(constrained_positions), dtype=np.int32)
+    
     # Track state
     best_score = float('-inf')
     best_mapping = None
-    best_components = (0.0, 0.0)  # Track best score components
+    best_components = (0.0, 0.0)
     current_mapping = np.full(n_items, -1, dtype=np.int32)
     used_positions = np.zeros(n_positions, dtype=bool)
-
+    
     # Statistics
     processed_perms = 0
     stats = {
-            'nodes_explored': 0,
-            'nodes_pruned': 0,
-            'start_time': time.time()
-        }
+        'nodes_explored': 0,
+        'nodes_pruned': 0,
+        'start_time': time.time()
+    }
 
     def dfs(depth: int) -> None:
-        """Depth-first search with aggressive pruning."""
+        """Depth-first search with debug logging."""
         nonlocal best_score, best_mapping, best_components, stats, processed_perms
-
         stats['nodes_explored'] += 1
 
-        # Found complete solution
+        # Solution found
         if depth == n_items:
             processed_perms += 1
+            
+            # Calculate score
             score, item_score, pair_score = calculate_score(
                 current_mapping, position_score_matrix,
                 item_scores, item_pair_score_matrix,
                 item_weight, item_pair_weight
             )
-            if score > best_score:
+            
+            if debug_print:
+                print(f"\nComplete solution found:")
+                print(f"  Score: {score:.6f}")
+                print(f"  Current best: {best_score:.6f}")
+                print(f"  Final mapping: {[positions_to_assign[p] for p in current_mapping]}")
+
+            # Update if better score found
+            margin = score - (best_score - np.abs(best_score) * np.finfo(np.float32).eps)
+            if margin > 0:
                 best_score = score
                 best_mapping = current_mapping.copy()
                 best_components = (item_score, pair_score)
+                if debug_print:
+                    print("  ACCEPTING NEW BEST")
             return
 
         # Get next item to place
-        item = get_next_item(current_mapping, constrained_items)
-
-        # Get valid positions for this item
+        item = get_next_item(current_mapping, constrained_items_array)
+        
+        # Get valid positions
+        valid_positions = []
         if item in constrained_items:
             valid_positions = [p for p in constrained_positions if not used_positions[p]]
         else:
             valid_positions = [p for p in range(n_positions) if not used_positions[p]]
-
+            
+        if debug_print and depth < 2:
+            print(f"\nDepth {depth}, placing item {items_to_assign[item]}")
+        
         # Try each valid position
         for pos in valid_positions:
-            # Place item
+            if debug_print and depth < 2:
+                print(f"\n  Trying {items_to_assign[item]} in {positions_to_assign[pos]}:")
+            
+            # Update mapping and used positions
             current_mapping[item] = pos
             used_positions[pos] = True
-
-            # Check if branch is promising
+            
+            # Calculate bound
             bound = calculate_upper_bound(
                 current_mapping, used_positions,
                 position_score_matrix, item_scores,
                 item_pair_score_matrix,
                 item_weight, item_pair_weight,
                 best_score=best_score,
-                single_solution=True
+                single_solution=True,
+                depth=depth
             )
-
-            if bound > best_score:
-                # Explore branch
+            
+            margin = bound - (best_score - np.abs(best_score) * np.finfo(np.float32).eps)
+            
+            if debug_print and depth < 2:
+                print(f"    Bound: {bound:.6f}")
+                print(f"    Margin vs best_score ({best_score:.6f}): {margin:.6f}")
+                print(f"    Decision: {'Explore' if margin > 0 else 'Prune'}")
+                
+            if margin > 0:
                 dfs(depth + 1)
             else:
                 stats['nodes_pruned'] += 1
-
-            # Undo placement
+            
+            # Undo changes for next iteration
             current_mapping[item] = -1
             used_positions[pos] = False
 
     # Start search
-    print("\nStarting optimized single-solution search...")
+    print("\nStarting optimized single-solution search with debug logging...")
     dfs(0)
-
-    # Convert result to mapping dictionary
-    result_mapping = {}
-    if best_mapping is not None:
-        for i, pos in enumerate(best_mapping):
-            result_mapping[items_to_assign[i]] = positions_to_assign[pos]
-
-    # Print statistics  
+    
+    # Print statistics
     elapsed = time.time() - stats['start_time']
     print(f"\nOptimization complete in {elapsed:.2f} seconds")
     print(f"Nodes explored: {stats['nodes_explored']:,}")
     print(f"Nodes pruned: {stats['nodes_pruned']:,}")
     rate = (stats['nodes_explored'] + stats['nodes_pruned']) / elapsed
     print(f"Processing rate: {rate:,.0f} nodes/second")
-
+    
+    # Convert result to mapping dictionary
+    result_mapping = {}
+    if best_mapping is not None:
+        for i, pos in enumerate(best_mapping):
+            result_mapping[items_to_assign[i]] = positions_to_assign[pos]
+            
     return best_score, result_mapping, best_components, processed_perms
 
 def branch_and_bound_optimal_nsolutions(
@@ -975,6 +1066,8 @@ def branch_and_bound_optimal_nsolutions(
         - List of (score, mapping, detailed_scores) tuples
         - Total number of permutations processed
     """
+    debug_print = False
+
     # Get items and positions from config
     items_to_assign = config['optimization']['items_to_assign']
     positions_to_assign = config['optimization']['positions_to_assign']
@@ -989,13 +1082,6 @@ def branch_and_bound_optimal_nsolutions(
     
     item_scores, item_pair_score_matrix, position_score_matrix = arrays
     item_weight, item_pair_weight = weights
-    
-    # Set up constraint tracking
-    constrained_items = set(items_to_constrain.lower())
-    constrained_positions = set(i for i, position in enumerate(positions_to_assign) 
-                              if position.upper() in positions_to_constrain.upper())
-    constrained_item_indices = set(i for i, item in enumerate(items_to_assign) 
-                                   if item in constrained_items)
     
     # Initialize search structures
     solutions = []  # Will store (score, unweighted_scores, mapping) tuples
@@ -1025,21 +1111,39 @@ def branch_and_bound_optimal_nsolutions(
                 pos = position_to_pos[position]
                 initial_mapping[idx] = pos
                 initial_used[pos] = True
-                print(f"Pre-assigned: {item} -> {position} (position {pos})")
-    
+                if debug_print:
+                    print(f"Pre-assigned: {item} -> {position} (position {pos})")
+        
     # Calculate phase perms
-    total_perms_phase1 = perm(len(constrained_positions), len(constrained_items))
-    phase2_remaining_items = n_items_to_assign - len(constrained_items) - len(items_assigned)
-    phase2_available_positions = n_positions_to_assign - len(constrained_items) - len(items_assigned)
-    perms_per_phase1_solution = perm(phase2_available_positions, phase2_remaining_items)
-    total_perms_phase2 = perms_per_phase1_solution * total_perms_phase1
+    if items_to_constrain:
+        # Set up constraint tracking
+        constrained_items = set(items_to_constrain.lower())
+        constrained_positions = set(i for i, position in enumerate(positions_to_assign) 
+                                if position.upper() in positions_to_constrain.upper())
+        constrained_item_indices = set(i for i, item in enumerate(items_to_assign) 
+                                    if item in constrained_items)
+        n_constrained = len(constrained_items)
 
-    print(f"\nPhase 1 (Constrained items): {total_perms_phase1:,} permutations")
-    print(f"Phase 2 (Remaining items): {total_perms_phase2:,} permutations")
+        total_perms_phase1 = perm(len(constrained_positions), len(constrained_items))
+    else:
+        constrained_items = None
+        constrained_positions = None
+        constrained_item_indices = None
+        n_constrained = 0
+        total_perms_phase1 = 0
+
+    n_phase2_remaining_items = n_items_to_assign - n_constrained - len(items_assigned)
+    n_phase2_available_positions = n_positions_to_assign - n_constrained - len(items_assigned)
+    n_perms_per_phase1_solution = perm(n_phase2_available_positions, n_phase2_remaining_items)
+    total_perms_phase2 = n_perms_per_phase1_solution * total_perms_phase1
+
+    if n_constrained:
+        print(f"\nPhase 1 (constrained items): {total_perms_phase1:,} permutations")
+        print(f"Phase 2 (remaining items): {total_perms_phase2:,} permutations")
+    else:
+        print("\nSkipping Phase 1 (no constrained items)")
+        print(f"Phase 2: {total_perms_phase2:,} permutations")
     
-    # Track progress
-    start_time = time.time()
-
     def phase1_dfs(mapping: np.ndarray, used: np.ndarray, depth: int, pbar: tqdm) -> List[Tuple[np.ndarray, np.ndarray]]:
         """DFS for Phase 1 (constrained items)."""
         solutions = []
@@ -1076,11 +1180,12 @@ def branch_and_bound_optimal_nsolutions(
     ) -> None:
         """DFS for Phase 2 (remaining items)."""
         nonlocal solutions, worst_top_n_score, processed_perms
-        
+
         # Process complete solutions
         if depth == n_items_to_assign:
-            if not validate_mapping(mapping, constrained_item_indices, constrained_positions):
-                return
+            if n_constrained:
+                if not validate_mapping(mapping, constrained_item_indices, constrained_positions):
+                    return
 
             processed_perms += 1
             pbar.update(1)
@@ -1094,7 +1199,8 @@ def branch_and_bound_optimal_nsolutions(
                 item_pair_weight
             )
 
-            if len(solutions) < n_solutions or total_score > worst_top_n_score:
+            margin = total_score - (worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps)
+            if len(solutions) < n_solutions or margin > 0:
                 solution = (
                     total_score,
                     item_component,
@@ -1107,20 +1213,27 @@ def branch_and_bound_optimal_nsolutions(
                     solutions.pop(0)  # Remove worst solution
                 worst_top_n_score = solutions[0][0]
             return
-
+       
         # Find next unassigned item
         current_item_idx = get_next_item(mapping)
-        if current_item_idx is None:
+        if current_item_idx == -1: 
             return
 
         # Get valid positions for this item
-        if current_item_idx in constrained_item_indices:
+        if n_constrained and current_item_idx in constrained_item_indices:
             valid_positions = [pos for pos in constrained_positions if not used[pos]]
         else:
             valid_positions = [pos for pos in range(n_positions_to_assign) if not used[pos]]
             
+        if debug_print:
+            print(f"\nPlacing item {items_to_assign[current_item_idx]} (idx {current_item_idx})")
+            print("Current mapping: ", mapping)
+            print(f"Valid positions: {valid_positions} ({[positions_to_assign[p] for p in valid_positions]})")
+
         # Try each valid position
         for pos in valid_positions:
+            if debug_print:
+                print(f"  Trying {items_to_assign[current_item_idx]} in position {positions_to_assign[pos]}")
             new_mapping = mapping.copy()
             new_mapping[current_item_idx] = pos
             new_used = used.copy()
@@ -1138,7 +1251,7 @@ def branch_and_bound_optimal_nsolutions(
                     depth=depth + 1
                 )
                 
-                margin = upper_bound - (worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps)
+                margin = upper_bound - worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps
                 if margin < 0:  # We can safely prune
                     pruning_stats['depth'][depth] += 1
                     pruning_stats['margin'].append(margin)
@@ -1146,17 +1259,17 @@ def branch_and_bound_optimal_nsolutions(
                     continue
                 pruning_stats['total_explored'] += 1
 
-            # Recurse
+            # Recursien:
             phase2_dfs(new_mapping, new_used, depth + 1, pbar)
 
     #-------------------------------------------------------------------------
     # Phase 1: Find all valid arrangements of constrained items
     #-------------------------------------------------------------------------
-    phase1_solutions = []
-    with tqdm(total=total_perms_phase1, desc="Phase 1", unit='perms') as pbar:
-        phase1_solutions = phase1_dfs(initial_mapping, initial_used, 0, pbar)
-    
-    print(f"\nFound {len(phase1_solutions)} valid phase 1 arrangements")
+    if n_constrained:
+        phase1_solutions = []
+        with tqdm(total=total_perms_phase1, desc="Phase 1", unit='perms') as pbar:
+            phase1_solutions = phase1_dfs(initial_mapping, initial_used, 0, pbar)      
+        print(f"\nFound {len(phase1_solutions)} valid phase 1 arrangements")
     
     #-------------------------------------------------------------------------
     # Phase 2: For each Phase 1 solution, arrange remaining items
@@ -1164,16 +1277,23 @@ def branch_and_bound_optimal_nsolutions(
     current_phase1_solution_index = 0
 
     with tqdm(total=total_perms_phase2, desc="Phase 2", unit='perms') as pbar:
-        for phase1_mapping, phase1_used in phase1_solutions:
-            print(f"\nProcessing Phase 1 solution {current_phase1_solution_index + 1}/{len(phase1_solutions)}")
-            
+        if n_constrained:
+            for phase1_mapping, phase1_used in phase1_solutions:
+                print(f"\nProcessing Phase 1 solution {current_phase1_solution_index + 1}/{len(phase1_solutions)}")
+                
+                # Calculate initial depth based on assigned items
+                initial_depth = sum(1 for i in range(n_items_to_assign) if phase1_mapping[i] >= 0)
+                
+                # Start DFS from this phase 1 solution
+                phase2_dfs(phase1_mapping, phase1_used, initial_depth, pbar)
+                
+                current_phase1_solution_index += 1
+        else:
             # Calculate initial depth based on assigned items
-            initial_depth = sum(1 for i in range(n_items_to_assign) if phase1_mapping[i] >= 0)
+            initial_depth = sum(1 for i in range(n_items_to_assign))
             
             # Start DFS from this phase 1 solution
-            phase2_dfs(phase1_mapping, phase1_used, initial_depth, pbar)
-            
-            current_phase1_solution_index += 1
+            phase2_dfs(initial_mapping, initial_used, 0, pbar)
 
     # Convert final solutions to return format
     return_solutions = []
@@ -1215,6 +1335,8 @@ def optimize_layout(config: dict) -> None:
     Main optimization function. Uses specialized single-solution search when nlayouts=1,
     otherwise uses original branch_and_bound_optimal search.
     """
+    start_time = time.time()
+
     # Get parameters from config
     items_to_assign = config['optimization']['items_to_assign']
     positions_to_assign = config['optimization']['positions_to_assign']
@@ -1225,13 +1347,9 @@ def optimize_layout(config: dict) -> None:
     print_keyboard = config['visualization']['print_keyboard']
     n_layouts = config['optimization'].get('nlayouts', 5)
 
-    # Convert to lowercase/uppercase for consistency
-    items_to_assign = items_to_assign.lower()
-    positions_to_assign = positions_to_assign.upper()
-    items_to_constrain = items_to_constrain.lower()
-    positions_to_constrain = positions_to_constrain.upper()
-    items_assigned = items_assigned.lower()
-    positions_assigned = positions_assigned.upper()
+    # Get scoring weights
+    item_weight = config['optimization']['scoring']['item_weight']
+    item_pair_weight = config['optimization']['scoring']['item_pair_weight']
 
     # Validate configuration
     validate_config(config)
@@ -1315,8 +1433,9 @@ def optimize_layout(config: dict) -> None:
         
     else:
         print(f"\nFinding top {n_layouts} solutions using branch and bound:")
-        print(f"  - {len(items_to_constrain)} constrained items: {items_to_constrain}")
-        print(f"  - {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
+        if constrained_items:
+            print(f"  - {len(items_to_constrain)} constrained items: {items_to_constrain}")
+            print(f"  - {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
 
         # Run multi-solution optimization
         results, processed_perms = branch_and_bound_optimal_nsolutions(
@@ -1376,7 +1495,4 @@ if __name__ == "__main__":
         
         import traceback
         traceback.print_exc()
-
-
-    
 

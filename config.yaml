@@ -18,20 +18,20 @@ paths:
 #-----------------------------------------------------------------------
 optimization:
 
-  items_to_assign:     "etaoinsrh" #ldcu"   # items to arrange in positions
-  positions_to_assign: "FDSVERAJKL" #MIU;"  # available positions
+  items_to_assign:     "ething" #eraog" #ldcu"   # items to arrange in positions
+  positions_to_assign: "FDSV" #E" #RAWCQ" #X" #Z" #   JKLM" #IU;"  # available positions
 
-  items_to_constrain:     "et"           # Subset of items_to_assign to arrange within positions_to_constrain
-  positions_to_constrain: "FDJK"         # Subset of positions_to_assign to constrain arrangement of items_to_constrain
+  items_to_constrain:     "et"         # Subset of items_to_assign to arrange within positions_to_constrain
+  positions_to_constrain: "FDSV"       # Subset of positions_to_assign to constrain arrangement of items_to_constrain
 
-  items_assigned:        ""              # Items already assigned to positions
-  positions_assigned:    ""              # Positions that are already filled 
+  items_assigned:        ""            # Items already assigned to positions
+  positions_assigned:    ""            # Positions that are already filled 
 
   scoring:  
-    item_weight: 0.5                     # Weight for single-item scoring
-    item_pair_weight: 0.5                # Weight for item_pair scoring
+    item_weight: 1                     # Weight for single-item scoring
+    item_pair_weight: 0                # Weight for item_pair scoring
 
-  nlayouts: 3                          # Number of top layouts to display and save
+  nlayouts: 1                          # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Visualization Settings
