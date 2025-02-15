@@ -2,8 +2,8 @@
 """
 Memory-efficient item-to-position layout optimization using branch and bound search.
 
-This script uses a branch and bound algorithm to find optimal positions for items 
-and item pairs by jointly considering two scoring components: 
+This script uses a branch and bound (single- or multi-solution) algorithm 
+to find optimal positions for items and item pairs by jointly considering two scores: 
 item/item_pair scores and position/position_pair scores.
 
 See README for more details.
@@ -14,7 +14,7 @@ import os
 import pandas as pd
 import numpy as np
 import yaml
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Set
 from math import perm
 from tqdm import tqdm
 import psutil
@@ -591,191 +591,352 @@ def print_top_results(results: List[Tuple[float, Dict[str, str], Dict[str, dict]
             )
         
 #-----------------------------------------------------------------------------
-# Optimizing functions
+# Multi-solution (N>1) and single-solution (faster) branch-and-bound functions
 #-----------------------------------------------------------------------------
 @jit(nopython=True, fastmath=True)
-def calculate_layout_score(
-    item_indices: np.ndarray,
-    position_score_matrix: np.ndarray,  
-    item_scores: np.ndarray,    
-    item_pair_score_matrix: np.ndarray,    
+def calculate_score(
+    mapping: np.ndarray,
+    position_score_matrix: np.ndarray,
+    item_scores: np.ndarray,
+    item_pair_score_matrix: np.ndarray,
     item_weight: float,
-    item_pair_weight: float
-) -> tuple:
-    """Calculate layout score for normalized [0,1] scores."""
-    if not np.any(item_indices >= 0):
-        return -1.0, 0.0, 0.0
-        
-    # Single-item component - no special normalization needed since scores are [0,1]
+    item_pair_weight: float,
+) -> Tuple[float, float, float]:
+    """
+    Calculate layout score with option to return component scores.
+    Handles both single and multi-solution scoring needs.
+    
+    Args:
+        mapping: Array of position indices for each item (-1 for unplaced)
+        position_score_matrix: Matrix of position and position-pair scores
+        item_scores: Array of item scores
+        item_pair_score_matrix: Matrix of item-pair scores
+        item_weight: Weight for item score component
+        item_pair_weight: Weight for item-pair score component
+    
+    Returns:
+        tuple of (total_score, item_component, pair_component)
+    """
+    # Handle empty/invalid case
+    if not np.any(mapping >= 0):
+        return (-1.0, 0.0, 0.0)
+    
+    # Calculate item score component
     item_component = np.float32(0.0)
     valid_count = 0
-    for i in range(len(item_indices)):
-        pos = item_indices[i]
+    for i in range(len(mapping)):
+        pos = mapping[i]
         if pos >= 0:
             item_component += position_score_matrix[pos, pos] * item_scores[i]
             valid_count += 1
     
+    # Normalize by number of placed items
     item_component = item_component / valid_count if valid_count > 0 else 0.0
     
-    # Item-pair component
+    # Calculate item-pair component
     item_pair_component = np.float32(0.0)
     pair_count = 0
-    for i in range(len(item_indices)):
-        pos1 = item_indices[i]
+    for i in range(len(mapping)):
+        pos1 = mapping[i]
         if pos1 >= 0:
-            for j in range(i + 1, len(item_indices)):
-                pos2 = item_indices[j]
+            for j in range(i + 1, len(mapping)):
+                pos2 = mapping[j]
                 if pos2 >= 0:
-                    # Simple sum of products since all scores are [0,1]
+                    # Score both directions and add to total
                     score = (position_score_matrix[pos1, pos2] * item_pair_score_matrix[i, j] +
-                            position_score_matrix[pos2, pos1] * item_pair_score_matrix[j, i])
+                             position_score_matrix[pos2, pos1] * item_pair_score_matrix[j, i])
                     item_pair_component += score
-                    pair_count += 2
+                    pair_count += 2  # Count both directions
 
+    # Normalize pair score by number of pairs
     item_pair_component = item_pair_component / pair_count if pair_count > 0 else 0.0
     
-    return (float(item_weight * item_component + item_pair_weight * item_pair_component),
-            float(item_component),
-            float(item_pair_component))
+    # Calculate weighted total
+    total_score = float(item_weight * item_component + item_pair_weight * item_pair_component)
+    
+    return total_score, item_component, item_pair_component
             
 @jit(nopython=True, fastmath=True)
 def calculate_upper_bound(
     mapping: np.ndarray,
-    depth: int,
     used: np.ndarray,
     position_score_matrix: np.ndarray,
     item_scores: np.ndarray,
     item_pair_score_matrix: np.ndarray,
     item_weight: float,
-    item_pair_weight: float
+    item_pair_weight: float,
+    best_score: float = float('-inf'),
+    single_solution: bool = False,
+    depth: int = None
 ) -> float:
-    """Calculate accurate upper bound on best possible score from this node."""
-
-    # Get current score from assigned items
-    current_score, current_unweighted_item_score, current_unweighted_item_pair_score = calculate_layout_score(
-        mapping, position_score_matrix, item_scores, item_pair_score_matrix, item_weight, item_pair_weight
+    """
+    Calculate upper bound on best possible score from this node.
+    Optimized for both single and multi-solution search.
+    
+    Args:
+        mapping: Current partial mapping of items to positions
+        used: Boolean array of used positions
+        position_score_matrix: Matrix of position/position-pair scores
+        item_scores: Array of item scores
+        item_pair_score_matrix: Matrix of item-pair scores
+        item_weight: Weight for item score component
+        item_pair_weight: Weight for item-pair score component
+        best_score: Current best score (used for early pruning in single-solution mode)
+        single_solution: If True, use aggressive pruning optimized for single solution
+        depth: Search depth (only used in multi-solution mode)
+    
+    Returns:
+        Upper bound on best possible score from this node
+    """
+    # Get current score from placed items
+    current_score, current_unweighted_item_score, current_unweighted_item_pair_score = calculate_score(
+        mapping, position_score_matrix, item_scores, 
+        item_pair_score_matrix, item_weight, item_pair_weight
     )
     
-    # Return the current score if there are no remaining items
-    n_remaining_items = len(mapping) - depth
-    if n_remaining_items == 0:
+    if single_solution:
+        # Quick rejection check for single-solution mode 
+        # (maximum possible additional score contribution)
+        if current_score + item_weight + item_pair_weight <= best_score:
+            return -np.inf
+
+    # Find unplaced items and available positions
+    unplaced = np.where(mapping < 0)[0]
+    available = np.where(~used)[0]
+    
+    if len(unplaced) == 0:
         return current_score
         
-    # Get unassigned items and available positions
-    # These include item indices that have -1 in the mapping array, and 
-    # include both constrained and unconstrained items that haven't been assigned
-    assigned = np.where(mapping >= 0)[0]  # Already placed items
-    unassigned = np.where(mapping < 0)[0]
-    available_positions = np.where(~used)[0]
+    #-------------------------------------------------------------------------
+    # Single-item component
+    #-------------------------------------------------------------------------
+    # Get position scores for remaining positions
+    position_values = np.zeros(len(available))
+    for i, pos in enumerate(available):
+        position_values[i] = position_score_matrix[pos, pos]
+    position_values.sort()
+    position_values = position_values[::-1]  # Highest to lowest
     
-    #-------------------------------------------------------------------------
-    # Item scoring component
-    #-------------------------------------------------------------------------
-    # Get single-item position scores (from diagonal)
-    # numba doesn't accept np.diagonal
-    #position_single_scores = np.diagonal(position_score_matrix)[available_positions]
-    position_single_scores = np.zeros(len(available_positions))
-    for i, pos in enumerate(available_positions):
-        position_single_scores[i] = position_score_matrix[pos, pos]
-    position_single_scores = np.sort(position_single_scores)[-n_remaining_items:][::-1]  # highest to lowest
+    # Get scores for remaining items
+    item_values = item_scores[unplaced]
+    item_values.sort()
+    item_values = item_values[::-1]  # Highest to lowest
+    
+    # Maximum possible item component
+    len_values = min(len(position_values), len(item_values))
+    max_item_component = np.sum(position_values[:len_values] * item_values[:len_values]) / len(mapping)
 
-    # Get scores for unassigned items
-    remaining_scores = item_scores[unassigned]
-    remaining_scores = np.sort(remaining_scores)[::-1]  # highest to lowest
-    
-    # Maximum possible item score contribution (unweighted)
-    max_item_component = np.sum(position_single_scores * remaining_scores) / len(mapping)
-    
     #-------------------------------------------------------------------------
-    # Item-pair scoring component
+    # Paired-item component
     #-------------------------------------------------------------------------
-    # Extract and sort position pair scores
-    n_available = len(available_positions)
-    position_pair_scores = np.zeros(n_available * (n_available - 1) // 2, dtype=np.float32)
-    idx = 0
-    for i in range(n_available):
-        pos1 = available_positions[i]
-        for j in range(i + 1, n_available):
-            pos2 = available_positions[j]
-            # Take maximum of both directions
-            score = max(position_score_matrix[pos1, pos2],
-                        position_score_matrix[pos2, pos1])
-            position_pair_scores[idx] = score
-            idx += 1
-    position_pair_scores = np.sort(position_pair_scores)[::-1]
-
-    #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-    # 1. Unassigned-to-unassigned item_pairs
-    #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-    n_unassigned = len(unassigned)
-    item_pair_scores = np.zeros(n_unassigned * (n_unassigned - 1) // 2, dtype=np.float32)
-    idx = 0
-    for i in range(n_unassigned):
-        for j in range(i + 1, n_unassigned):
-            l1, l2 = unassigned[i], unassigned[j]
-            # Take maximum of both directions
-            score = max(item_pair_score_matrix[l1, l2],
-                        item_pair_score_matrix[l2, l1])
-            item_pair_scores[idx] = score
-            idx += 1
-    item_pair_scores = np.sort(item_pair_scores)[::-1]
+    # Maximum possible pair component
+    max_pair_component = 0.0
+    n_pairs = 0
     
-    # Match best pairs
-    # The unassigned pairs loop only does the upper triangle (i,j) not (j,i), 
-    # so each pair is counted once in idx, and the score is normalized by n_pairs:
-    n_pairs = min(len(position_pair_scores), len(item_pair_scores))
+    # 1. Pairs between placed and unplaced
+    placed = np.where(mapping >= 0)[0]
+    for p_item in placed:
+        p_pos = mapping[p_item]
+        for u_item in unplaced:
+            # Add scores for each pair in both directions
+            for pos in available:
+                score1 = item_pair_score_matrix[p_item, u_item] * position_score_matrix[p_pos, pos]
+                score2 = item_pair_score_matrix[u_item, p_item] * position_score_matrix[pos, p_pos]
+                max_pair_component += (score1 + score2)
+                n_pairs += 2  # Count both directions
+    
+    # 2. Pairs between unplaced items
+    n_unplaced_pairs = len(unplaced) * (len(unplaced) - 1)
+    if n_unplaced_pairs > 0:
+        # Collect and sort all pair score sums across both directions
+        pair_scores = []
+        for i in range(len(unplaced)):
+            for j in range(i + 1, len(unplaced)):
+                score = (item_pair_score_matrix[unplaced[i], unplaced[j]] +
+                         item_pair_score_matrix[unplaced[j], unplaced[i]])
+                pair_scores.append(score)
+        pair_scores.sort()
+        pair_scores.reverse()
+        
+        # Match with best position pairs
+        pos_pair_scores = []
+        for i in range(len(available)):
+            for j in range(i + 1, len(available)):
+                score = (position_score_matrix[available[i], available[j]] +
+                         position_score_matrix[available[j], available[i]])
+                pos_pair_scores.append(score)
+        pos_pair_scores.sort()
+        pos_pair_scores.reverse()
+        
+        # Take best possible matches
+        n_pairs_to_match = min(len(pair_scores), len(pos_pair_scores))
+        for i in range(n_pairs_to_match):
+            max_pair_component += pair_scores[i] * pos_pair_scores[i]
+            n_pairs += 2  # Count both directions
+    
     if n_pairs > 0:
-        unassigned_score = np.sum(position_pair_scores[:n_pairs] * item_pair_scores[:n_pairs]) / n_pairs
-    else:
-        unassigned_score = 0.0
-
-    #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-    # 2. Assigned-to-unassigned item_pairs
-    #- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-    # Assigned-to-unassigned scores (normalized)
-    assigned_unassigned_score = 0.0
-    n_assigned_unassigned_pairs = 0
-    for i in assigned:
-        pos_i = mapping[i]
-        for j in unassigned:
-            score = max(item_pair_score_matrix[i, j],
-                        item_pair_score_matrix[j, i])
-            
-            best_position = 0.0
-            for pos_j in available_positions:
-                position = max(position_score_matrix[pos_i, pos_j],
-                               position_score_matrix[pos_j, pos_i])
-                best_position = max(best_position, position)
-            
-            # The assigned-unassigned loop does all combinations, 
-            # multiplies the score by 2 for both directions,
-            # and explicitly counts each direction by incrementing by 2:
-            assigned_unassigned_score += 2 * (best_position * score)
-            n_assigned_unassigned_pairs += 2  # Count both directions
-
-    # Normalize by the number of pairs
-    if n_assigned_unassigned_pairs > 0:
-        assigned_unassigned_score /= n_assigned_unassigned_pairs
-
-    max_item_pair_component = unassigned_score + assigned_unassigned_score
+        max_pair_component = max_pair_component / n_pairs
         
     #-------------------------------------------------------------------------
-    # Weight and combine components
+    # Combine components
     #-------------------------------------------------------------------------
     total_item_score = (current_unweighted_item_score + max_item_component) * item_weight
-    total_item_pair_score = (current_unweighted_item_pair_score + 
-                             max_item_pair_component) * item_pair_weight
+    total_pair_score = (current_unweighted_item_pair_score + max_pair_component) * item_pair_weight
+    combined_score = float(total_item_score + total_pair_score)
 
-    return float(total_item_score + total_item_pair_score)
+    if single_solution:
+        return combined_score if combined_score > best_score else -np.inf
+    else:
+        return combined_score
+    
+@jit(nopython=True)
+def get_next_item(
+    mapping: np.ndarray,
+    constrained_items: Set[int] = None
+) -> int:
+    """
+    Get next item to place, prioritizing constrained items if provided.
+    
+    Args:
+        mapping: Array of position indices (-1 for unplaced)
+        constrained_items: Optional set of item indices that must be placed first
+    
+    Returns:
+        Index of next item to place, or -1 if no items left
+    """
+    # Handle constrained items first if provided
+    if constrained_items is not None:
+        for item in constrained_items:
+            if mapping[item] < 0:
+                return item
+    
+    # Find first unplaced item
+    for item in range(len(mapping)):
+        if mapping[item] < 0:
+            return item
+            
+    return -1
 
-def get_next_unassigned_item(mapping: np.ndarray) -> int:
-    """Find the index of the next unassigned item."""
-    for i in range(len(mapping)):
-        if mapping[i] < 0:
-            return i
-    return None
+def branch_and_bound_optimal_solution(
+    items_to_assign: str,
+    positions_to_assign: str,
+    arrays: Tuple[np.ndarray, np.ndarray, np.ndarray],
+    weights: Tuple[float, float],
+    constrained_items: Set[int] = None,
+    constrained_positions: Set[int] = None
+) -> Tuple[float, Dict[str, str], Tuple[float, float], int]:
+    """
+    Find optimal single solution using aggressive pruning.
 
-def branch_and_bound_optimal(
+    Returns:
+        Tuple containing:
+        - best_score: Float score of best solution
+        - result_mapping: Dict mapping items to positions
+        - score_components: Tuple of (item_score, pair_score)
+        - processed_perms: Number of complete permutations processed
+    """
+    # Initialize
+    n_items = len(items_to_assign)
+    n_positions = len(positions_to_assign)
+    item_scores, item_pair_score_matrix, position_score_matrix = arrays
+    item_weight, item_pair_weight = weights
+
+    if constrained_items is None:
+        constrained_items = set()
+    if constrained_positions is None:
+        constrained_positions = set()
+
+    # Track state
+    best_score = float('-inf')
+    best_mapping = None
+    best_components = (0.0, 0.0)  # Track best score components
+    current_mapping = np.full(n_items, -1, dtype=np.int32)
+    used_positions = np.zeros(n_positions, dtype=bool)
+
+    # Statistics
+    processed_perms = 0
+    stats = {
+            'nodes_explored': 0,
+            'nodes_pruned': 0,
+            'start_time': time.time()
+        }
+
+    def dfs(depth: int) -> None:
+        """Depth-first search with aggressive pruning."""
+        nonlocal best_score, best_mapping, best_components, stats, processed_perms
+
+        stats['nodes_explored'] += 1
+
+        # Found complete solution
+        if depth == n_items:
+            processed_perms += 1
+            score, item_score, pair_score = calculate_score(
+                current_mapping, position_score_matrix,
+                item_scores, item_pair_score_matrix,
+                item_weight, item_pair_weight
+            )
+            if score > best_score:
+                best_score = score
+                best_mapping = current_mapping.copy()
+                best_components = (item_score, pair_score)
+            return
+
+        # Get next item to place
+        item = get_next_item(current_mapping, constrained_items)
+
+        # Get valid positions for this item
+        if item in constrained_items:
+            valid_positions = [p for p in constrained_positions if not used_positions[p]]
+        else:
+            valid_positions = [p for p in range(n_positions) if not used_positions[p]]
+
+        # Try each valid position
+        for pos in valid_positions:
+            # Place item
+            current_mapping[item] = pos
+            used_positions[pos] = True
+
+            # Check if branch is promising
+            bound = calculate_upper_bound(
+                current_mapping, used_positions,
+                position_score_matrix, item_scores,
+                item_pair_score_matrix,
+                item_weight, item_pair_weight,
+                best_score=best_score,
+                single_solution=True
+            )
+
+            if bound > best_score:
+                # Explore branch
+                dfs(depth + 1)
+            else:
+                stats['nodes_pruned'] += 1
+
+            # Undo placement
+            current_mapping[item] = -1
+            used_positions[pos] = False
+
+    # Start search
+    print("\nStarting optimized single-solution search...")
+    dfs(0)
+
+    # Convert result to mapping dictionary
+    result_mapping = {}
+    if best_mapping is not None:
+        for i, pos in enumerate(best_mapping):
+            result_mapping[items_to_assign[i]] = positions_to_assign[pos]
+
+    # Print statistics  
+    elapsed = time.time() - stats['start_time']
+    print(f"\nOptimization complete in {elapsed:.2f} seconds")
+    print(f"Nodes explored: {stats['nodes_explored']:,}")
+    print(f"Nodes pruned: {stats['nodes_pruned']:,}")
+    rate = (stats['nodes_explored'] + stats['nodes_pruned']) / elapsed
+    print(f"Processing rate: {rate:,.0f} nodes/second")
+
+    return best_score, result_mapping, best_components, processed_perms
+
+def branch_and_bound_optimal_nsolutions(
     arrays: tuple,
     weights: tuple,
     config: dict,
@@ -924,7 +1085,7 @@ def branch_and_bound_optimal(
             processed_perms += 1
             pbar.update(1)
             
-            score_tuple = calculate_layout_score(
+            total_score, item_component, item_pair_component = calculate_score(
                 mapping,
                 position_score_matrix,
                 item_scores,
@@ -932,13 +1093,12 @@ def branch_and_bound_optimal(
                 item_weight,
                 item_pair_weight
             )
-            total_score, unweighted_item_score, unweighted_item_pair_score = score_tuple
 
             if len(solutions) < n_solutions or total_score > worst_top_n_score:
                 solution = (
                     total_score,
-                    unweighted_item_score,
-                    unweighted_item_pair_score,
+                    item_component,
+                    item_pair_component,
                     mapping.tolist()
                 )
                 solutions.append(solution)
@@ -949,7 +1109,7 @@ def branch_and_bound_optimal(
             return
 
         # Find next unassigned item
-        current_item_idx = get_next_unassigned_item(mapping)
+        current_item_idx = get_next_item(mapping)
         if current_item_idx is None:
             return
 
@@ -969,9 +1129,13 @@ def branch_and_bound_optimal(
             # Only prune if we have n solutions to compare against
             if len(solutions) >= n_solutions:
                 upper_bound = calculate_upper_bound(
-                    new_mapping, depth + 1, new_used,
+                    new_mapping, new_used,
                     position_score_matrix, item_scores,
-                    item_pair_score_matrix, item_weight, item_pair_weight
+                    item_pair_score_matrix,
+                    item_weight, item_pair_weight,
+                    best_score=worst_top_n_score,
+                    single_solution=False,
+                    depth=depth + 1
                 )
                 
                 margin = upper_bound - (worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps)
@@ -1043,9 +1207,13 @@ def branch_and_bound_optimal(
 
     return return_solutions, processed_perms
 
+#-----------------------------------------------------------------------------
+# Main function and pipeline
+#-----------------------------------------------------------------------------
 def optimize_layout(config: dict) -> None:
     """
-    Main optimization function.
+    Main optimization function. Uses specialized single-solution search when nlayouts=1,
+    otherwise uses original branch_and_bound_optimal search.
     """
     # Get parameters from config
     items_to_assign = config['optimization']['items_to_assign']
@@ -1055,6 +1223,7 @@ def optimize_layout(config: dict) -> None:
     items_assigned = config['optimization'].get('items_assigned', '')
     positions_assigned = config['optimization'].get('positions_assigned', '')
     print_keyboard = config['visualization']['print_keyboard']
+    n_layouts = config['optimization'].get('nlayouts', 5)
 
     # Convert to lowercase/uppercase for consistency
     items_to_assign = items_to_assign.lower()
@@ -1088,12 +1257,12 @@ def optimize_layout(config: dict) -> None:
         print(f"Total permutations: {search_space['total_perms']:,}")
         print(f"- Arranging {search_space['details']['remaining_items']} items in {search_space['details']['remaining_positions']} positions")
 
-    # Show initial positionboard
+    # Show initial keyboard
     if print_keyboard:
         print("\n")
         visualize_keyboard_layout(
             mapping=None,
-            title="positions to optimize",
+            title="Positions to optimize",
             items_to_display=items_assigned,
             positions_to_display=positions_assigned,
             config=config
@@ -1107,63 +1276,88 @@ def optimize_layout(config: dict) -> None:
     item_weight = config['optimization']['scoring']['item_weight']
     item_pair_weight = config['optimization']['scoring']['item_pair_weight']
         
-    # Prepare arrays and run optimization
+    # Prepare arrays for optimization
     arrays = prepare_arrays(
         items_to_assign, positions_to_assign,
         norm_item_scores, norm_item_pair_scores, 
         norm_position_scores, norm_position_pair_scores
     )
-    
-    # Get number of layouts from config
-    n_layouts = config['optimization'].get('nlayouts', 5)
-    
-    print("\nStarting Phase 1 optimization to find top {n_layouts} solutions:")
-    print(f"  - {len(items_to_constrain)} constrained items: {items_to_constrain}")
-    print(f"  - {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
-    print(f"  - Finding top {n_layouts} solutions")
-
-    # Run optimization
     weights = (item_weight, item_pair_weight)
-    results, processed_perms = branch_and_bound_optimal(
-        arrays=arrays,
-        weights=weights,
-        config=config,
-        n_solutions=n_layouts
-    )
-    
-    # Sort and save results
-    sorted_results = sorted(
-        results,
-        key=lambda x: (
-            x[0],                                         # use total_score as primary sort
-            x[2]['total']['unweighted_item_score'],       # use item score as secondary sort
-            x[2]['total']['unweighted_item_pair_score']   # use item_pair score as tertiary sort
-        ),
-        reverse=True
-    )
-    
+
+    # Prepare constraint sets
+    constrained_items = {i for i, item in enumerate(items_to_assign) 
+                        if item in items_to_constrain.lower()}
+    constrained_positions = {i for i, pos in enumerate(positions_to_assign) 
+                           if pos in positions_to_constrain.upper()}
+
+    # Choose optimization strategy based on nlayouts
+    if n_layouts == 1:
+        print("\nUsing specialized single-solution optimization")
+        best_score, best_mapping, (score1, score2), processed_perms = branch_and_bound_optimal_solution(
+            items_to_assign=items_to_assign,
+            positions_to_assign=positions_to_assign,
+            arrays=arrays,
+            weights=weights,
+            constrained_items=constrained_items,
+            constrained_positions=constrained_positions
+        )
+        
+        # Convert to results format
+        results = [(
+            best_score,
+            best_mapping,
+            {'total': {
+                'total_score': best_score,
+                'unweighted_item_pair_score': score1,
+                'unweighted_item_score': score2
+            }}
+        )]
+        
+    else:
+        print(f"\nFinding top {n_layouts} solutions using branch and bound:")
+        print(f"  - {len(items_to_constrain)} constrained items: {items_to_constrain}")
+        print(f"  - {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
+
+        # Run multi-solution optimization
+        results, processed_perms = branch_and_bound_optimal_nsolutions(
+            arrays=arrays,
+            weights=weights,
+            config=config,
+            n_solutions=n_layouts
+        )
+        
+        # Sort results
+        results = sorted(
+            results,
+            key=lambda x: (
+                x[0],  # total_score
+                x[2]['total']['unweighted_item_score'],
+                x[2]['total']['unweighted_item_pair_score']
+            ),
+            reverse=True
+        )
+
+    # Print results
     print_top_results(
-        results=sorted_results,
+        results=results,
         config=config,
         n=None,
         items_to_display=items_assigned,
         positions_to_display=positions_assigned,
         print_keyboard=print_keyboard
     )
-    
-    save_results_to_csv(sorted_results, config)
+
+    # Save results
+    save_results_to_csv(results, config)
 
     # Final statistics reporting
     elapsed_time = time.time() - start_time
     if processed_perms >= search_space['total_perms']:
-        print(f"Total permutations processed: {processed_perms:,} (100% of solution space explored) in {timedelta(seconds=int(elapsed_time))}")
+        print(f"\nTotal permutations processed: {processed_perms:,} (100% of solution space explored) in {timedelta(seconds=int(elapsed_time))}")
     else:
         percent_explored = (processed_perms / search_space['total_perms']) * 100
         print(f"Total permutations processed: {processed_perms:,} ({percent_explored:.1f}% of solution space explored) in {timedelta(seconds=int(elapsed_time))}")
-
-#--------------------------------------------------------------------
-# Pipeline
-#--------------------------------------------------------------------
+    
 if __name__ == "__main__":
     try:
         start_time = time.time()
