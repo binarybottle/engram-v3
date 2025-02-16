@@ -1,107 +1,90 @@
-# engram-v3
-Arno's Engram v3 ("Engram") is a method for optimizing keyboard layouts 
-for touch typing in English based on a study of key-pair typing preference data.
+# optimize_layouts/README.md
+Optimize layouts of items and item-pairs. 
 ===================================================================
 
-https://github.com/binarybottle/engram-v3.git
+https://github.com/binarybottle/optimize_layouts.git
 
 Author: Arno Klein (binarybottle.com)
 
-This script uses a branch and bound algorithm to find optimal positions for items 
-and item pairs by jointly considering two scoring components: 
-item/item_pair scores and position/position_pair scores.
+## Context
+This code uses a branch-and-bound algorithm to find optimal positions 
+for items by jointly considering two scoring components: 
+item/item_pair scores and position/position_pair scores (see "Layout scoring").
 
-The primary intended use-case is keyboard layout optimization for touch typing, where:
+The initial intended use-case is keyboard layout optimization for touch typing:
   - Items and item-pairs correspond to letters and bigrams.
   - Positions and position-pairs correspond to keys and key-pairs.  
   - Item scores and item-pair scores correspond to frequency of occurrence 
-    of letters and bigrams in a given language.
-  - Position scores and position-pair scores correspond to measures of speed or comfort  
-    when typing single keys or pairs of keys (in a given language).
-  
+    of letters and frequency of bigrams in a given language.
+  - Position scores and position-pair scores correspond to a measure of comfort  
+    when typing single keys or pairs of keys (for any language).
 
+## Layout scoring
+Layouts are scored based on item and item_pair scores 
+and corresponding position and position_pair scores,
+where below, I is the number of items, and P is the number of item_pairs:
 
-## Context
-This software optimizes letter arrangements on a keyboard.
-It scores layouts based on bigram and letter frequencies (in English) 
-and corresponding key-pair and single-key typing comfort scores:
+    item_component = sum_i_I(item_score_i * position_score_i) / I
+    
+    item_pair_component = sum_j_P(
+        item_pair_score_j_sequence1 * position_pair_score_j_sequence1 +
+        item_pair_score_j_sequence2 * position_pair_score_j_sequence2) / P
+ 
+    score = item_weight * item_component + item_pair_weight * item_pair_component
 
-    bigram_component = (bigram1_frequency * keypair1_comfort) + 
-                       (bigram2_frequency * keypair2_comfort) / 2
+Scoring System:
+  - Calculates separate item and item-pair scores
+  - Distribution detection and normalization of all scores to 0-1 range
+  - Considers both directions for each item-pair
+  - Provides detailed scoring breakdowns
 
-    letter_component = letter_frequency * key_comfort
+Branch and Bound Optimization:
+  - Calculates exact scores for placed letters
+  - Uses provable upper bounds for unplaced letters
+  - Prunes branches that cannot exceed best known solution
+  - Depth-first search maintains optimality while reducing search space
+  - Uses numba-optimized array operations
+  - Detailed progress tracking and statistics
+  - Comprehensive validation of input configurations
+  - Optional constraints for a subset of items
+  - Specialized single-solution optimization when nlayouts=1
 
-    score = (bigram_weight * bigram_component) + 
-            (letter_weight * letter_component)
+## Setup
+The code expects four input files with the following column names,
+where the 1st column is a letter or letter-pair, and the 2nd column is a number:
+  - item_scores_file:           item, score       
+  - item_pair_scores_file:      item_pair, score
+  - position_scores_file:       position, score
+  - position_pair_scores_file:  position_pair, score
 
-The typing comfort scores were estimated by a Bayesian learning method
-(https://github.com/binarybottle/bigram_typing_preferences_to_comfort_scores)
-applied to key-pair typing preference data collected from hundreds of participants 
-as part of the Bigram Typing Preference Study (https://github.com/binarybottle/bigram_typing_preference_study).
+The code will accept any set of letters (and special characters) 
+to represent items, item pairs, positions, and position pairs, 
+so long as item pair characters are composed of two item characters 
+and position pair characters are composed of two position characters.
 
-## Description
-The main script optimizes keyboard layouts by jointly considering typing comfort 
-and letter/bigram frequencies. It uses a branch and bound algorithm to find optimal 
-letter placements while staying within memory constraints.
+A configuration file (config.yaml) specifies these filenames,
+as well as text strings that represent items/positions to arrange or constrain:
+  - Required:
+    - items_to_assign: items to arrange in positions_to_assign
+    - positions_to_assign: available positions
+  - Optional:
+    - items_assigned: items already assigned to positions
+    - positions_assigned: positions that are already filled 
+    - items_to_constrain: subset of items_to_assign to arrange within positions_to_constrain
+    - positions_to_constrain: subset of positions_to_assign to constrain items_to_constrain
 
-When configuring a set of letters to optimally arrange within a set of keys,
-you can assign a subset of the letters to be constrained within a subset of the keys. 
-It would then run in two phases: 
-- Phase 1 finds all possible arrangements of the letters to be constrained, 
-  and sorts these according to the scoring criteria above.
-- Phase 2 optimally arranges the remaining letters within the remaining keys.
-If no constraints are specified, the code effectively runs in Phase 2 mode.
-
-Core Components:
-
-1. Scoring System:
-   - Combines comfort scores for individual keys and key pairs
-   - Weights letter and bigram frequencies from language analysis
-   - Considers hand alternation through left/right hand assignments
-   - Normalizes all scores to 0-1 range for consistent weighting
-
-2. Branch and Bound Optimization:
-   - Calculates exact scores for placed letters
-   - Uses provable upper bounds for unplaced letters
-   - Prunes branches that cannot exceed best known solution
-   - Maintains optimality while reducing search space
-
-3. Memory Management:
-   - Estimates memory requirements before execution
-   - Uses numba-optimized array operations
-   - Monitors memory usage during search
-   - Provides early stopping with best found solutions
-
-4. Layout Evaluation:
-   - Calculates separate letter and bigram scores
-   - Considers both directions for each bigram
-   - Supports arbitrary letter subsets and key positions
-   - Provides detailed scoring breakdowns
-
-Input:
-
-- Configuration file (config.yaml) specifying:
-  - Letters to optimize
-  - Available key positions
-  - Scoring weights
-  - Comfort score files
-- Pre-computed comfort scores for keys and key pairs
-- Language statistics (letter and bigram frequencies)
-
-Output:
-
-- Top N scoring layouts with:
-  - Letter-to-key mappings
-  - Total scores
-  - Unweighted letter and bigram scores
-- Visual keyboard layout representations including:
-  - ASCII art visualization of the layout
-  - Clear marking of constrained positions
-- Detailed CSV results with:
-  - Configuration parameters
-  - Search space statistics
-  - Complete scoring breakdown
-- Progress updates during execution:
-  - Nodes processed per second
-  - Memory usage
-  - Estimated time remaining
+## Output
+  - Top-scoring layouts:
+    - Item-to-position mappings
+    - Total score and unweighted item and item-pair scores
+  - Detailed command-line output and CSV file:
+    - Configuration parameters
+    - Search space statistics
+    - Pruning statistics
+    - Complete scoring breakdown
+  - Progress updates during execution:
+    - Permutations processed per second
+    - Estimated time remaining
+  - Optional visual mapping of layouts as a partial keyboard:
+    - ASCII art visualization of the layout
+    - Clear marking of constrained positions

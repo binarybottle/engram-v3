@@ -664,6 +664,8 @@ def calculate_score(
     """
     Calculate layout score with option to return component scores.
     Handles both single and multi-solution scoring needs.
+
+    
     
     Args:
         mapping: Array of position indices for each item (-1 for unplaced)
@@ -730,6 +732,7 @@ def calculate_upper_bound(
     """
     Calculate upper bound on best possible score from this node.
     Optimized for both single and multi-solution search.
+    See calculate_score() for corresponding scoring approach.
     
     Args:
         mapping: Current partial mapping of items to positions
