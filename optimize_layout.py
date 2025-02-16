@@ -295,18 +295,21 @@ def load_and_normalize_scores(config: dict):
         for idx, row in item_df.iterrows():
             norm_item_scores[row['item'].lower()] = np.float32(norm_scores[idx])
     
+
     #-------------------------------------------------------------------------
     # Load pair scores if item_pair_weight > 0
     #-------------------------------------------------------------------------
     if item_pair_weight > 0:
-        # Create sets of valid items and positions for validation
-        valid_items = set(items_to_assign.lower())
-        valid_positions = set(positions_to_assign.lower())
-        
         # Load item pair scores
         print("\nLoading item pair scores...")
         item_pair_df = pd.read_csv(config['paths']['input']['item_pair_scores_file'], 
                                    dtype={'item_pair': str})
+        
+        # Get valid items from the item scores file
+        item_df = pd.read_csv(config['paths']['input']['item_scores_file'], 
+                              dtype={'item': str})
+        valid_items = set(item_df['item'].str.lower())
+        
         scores = item_pair_df['score'].values
         norm_scores = detect_and_normalize_distribution(scores, 'Item pair scores')
         print("  - original:", min(scores), "to", max(scores))
@@ -319,21 +322,27 @@ def load_and_normalize_scores(config: dict):
                 print(f"Warning: non-string item_pair at index {idx}: {item_pair} of type {type(item_pair)}")
                 continue
             chars = tuple(item_pair.lower())
-            # Verify both characters are valid items
+            # Verify both characters exist in item scores file
             if not all(c in valid_items for c in chars):
                 invalid_item_pairs.append((idx, item_pair))
                 continue
             norm_item_pair_scores[chars] = np.float32(norm_scores[idx])
         
         if invalid_item_pairs:
-            print("\nWarning: Found invalid item pairs:")
+            print("\nWarning: Found item pairs with items not in item scores file:")
             for idx, pair in invalid_item_pairs:
-                print(f"  Row {idx}: '{pair}' contains items not in items_to_assign")
+                print(f"  Row {idx}: '{pair}' contains undefined items")
 
         # Load position pair scores
         print("\nLoading position pair scores...")
         position_pair_df = pd.read_csv(config['paths']['input']['position_pair_scores_file'], 
-                                       dtype={'item_pair': str})
+                                       dtype={'position_pair': str})
+        
+        # Get valid positions from the position scores file
+        position_df = pd.read_csv(config['paths']['input']['position_scores_file'], 
+                                  dtype={'position': str})
+        valid_positions = set(position_df['position'].str.lower())
+        
         scores = position_pair_df['score'].values
         norm_scores = detect_and_normalize_distribution(scores, 'Position pair scores')
         print("  - original:", min(scores), "to", max(scores))
@@ -342,16 +351,16 @@ def load_and_normalize_scores(config: dict):
         invalid_position_pairs = []
         for idx, row in position_pair_df.iterrows():
             chars = tuple(c.lower() for c in row['position_pair'])
-            # Verify both characters are valid positions
+            # Verify both positions exist in position scores file
             if not all(c in valid_positions for c in chars):
                 invalid_position_pairs.append((idx, row['position_pair']))
                 continue
             norm_position_pair_scores[chars] = np.float32(norm_scores[idx])
             
         if invalid_position_pairs:
-            print("\nWarning: Found invalid position pairs:")
+            print("\nWarning: Found position pairs with positions not in position scores file:")
             for idx, pair in invalid_position_pairs:
-                print(f"  Row {idx}: '{pair}' contains positions not in positions_to_assign")
+                print(f"  Row {idx}: '{pair}' contains undefined positions")
 
     return norm_item_scores, norm_item_pair_scores, norm_position_scores, norm_position_pair_scores
    
@@ -919,7 +928,8 @@ def branch_and_bound_optimal_solution(
     arrays: Tuple[np.ndarray, np.ndarray, np.ndarray],
     weights: Tuple[float, float],
     constrained_items: Set[int] = None,
-    constrained_positions: Set[int] = None
+    constrained_positions: Set[int] = None,
+    pbar: tqdm = None
 ) -> Tuple[float, Dict[str, str], Tuple[float, float], int]:
     """Find optimal single solution using aggressive pruning with debug logging."""
     debug_print = False
@@ -1016,9 +1026,30 @@ def branch_and_bound_optimal_solution(
         nonlocal best_score, best_mapping, best_components, processed_perms
         stats['nodes_explored'] += 1
 
-        # Check if all items are placed
-        if all(mapping[i] >= 0 for i in range(n_items)):
+        # Update progress periodically
+        if pbar and stats['nodes_explored'] % 10000 == 0:
+            pbar.n = processed_perms
+            pbar.refresh()
+            
+            # Update progress bar statistics
+            if processed_perms > 0:
+                elapsed = time.time() - stats['start_time']
+                rate = processed_perms / elapsed if elapsed > 0 else 0
+                remaining = pbar.total - processed_perms
+                eta = remaining / rate if rate > 0 else 0
+                
+                pbar.set_postfix({
+                    'Perms/sec': f"{rate:,.0f}",
+                    'ETA': f"{eta/60:.1f}m",
+                    'Memory': f"{psutil.Process().memory_info().rss/1e9:.1f}GB"
+                })
+
+        # Process complete solutions
+        if all(mapping[i] >= 0 for i in range(len(mapping))):
             processed_perms += 1
+            if pbar:
+                pbar.n = processed_perms
+                pbar.refresh()
             
             # Validate solution
             if not validate_mapping(mapping):
@@ -1523,19 +1554,21 @@ def optimize_layout(config: dict) -> None:
                                      if item in items_to_constrain)
         constrained_position_indices = set(i for i, position in enumerate(positions_to_assign) 
                                          if position in positions_to_constrain)
-        
-        #print(f"Constrained items: {[items_to_assign[i] for i in constrained_item_indices]}")
-        #print(f"Constrained positions: {[positions_to_assign[i] for i in constrained_position_indices]}")
-        
-        best_score, best_mapping, (score1, score2), processed_perms = branch_and_bound_optimal_solution(
-            items_to_assign=items_to_assign,
-            positions_to_assign=positions_to_assign,
-            arrays=arrays,
-            weights=weights,
-            constrained_items=constrained_item_indices,
-            constrained_positions=constrained_position_indices
-        )
-        
+
+        # Set up progress bar for single solution search
+        with tqdm(total=search_space['total_perms'], 
+                 desc="Optimizing layout", 
+                 unit='perms') as pbar:
+            best_score, best_mapping, (score1, score2), processed_perms = branch_and_bound_optimal_solution(
+                items_to_assign=items_to_assign,
+                positions_to_assign=positions_to_assign,
+                arrays=arrays,
+                weights=weights,
+                constrained_items=constrained_item_indices,
+                constrained_positions=constrained_position_indices,
+                pbar=pbar  # Pass progress bar to function
+            )
+
         # Convert to results format
         results = [(
             best_score,
