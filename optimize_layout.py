@@ -160,7 +160,9 @@ def prepare_arrays(
     norm_item_scores: Dict[str, float],
     norm_item_pair_scores: Dict[Tuple[str, str], float],
     norm_position_scores: Dict[str, float],
-    norm_position_pair_scores: Dict[Tuple[str, str], float]
+    norm_position_pair_scores: Dict[Tuple[str, str], float],
+    missing_item_pair_norm_score: float,
+    missing_position_pair_norm_score: float
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Prepare input arrays and verify they are normalized to [0,1]."""
     n_items_to_assign = len(items_to_assign)
@@ -171,9 +173,11 @@ def prepare_arrays(
     for i, k1 in enumerate(positions_to_assign):
         for j, k2 in enumerate(positions_to_assign):
             if i == j:
-                position_score_matrix[i, j] = norm_position_scores.get(k1.lower(), 0.0)
+                position_score_matrix[i, j] = norm_position_scores.get(k1.lower(), 
+                                                                       missing_position_pair_norm_score)
             else:
-                position_score_matrix[i, j] = norm_position_pair_scores.get((k1.lower(), k2.lower()), 0.0)
+                position_score_matrix[i, j] = norm_position_pair_scores.get((k1.lower(), k2.lower()), 
+                                                                            missing_position_pair_norm_score)
     
     # Create item score array
     item_scores = np.array([
@@ -184,7 +188,8 @@ def prepare_arrays(
     item_pair_score_matrix = np.zeros((n_items_to_assign, n_items_to_assign), dtype=np.float32)
     for i, l1 in enumerate(items_to_assign):
         for j, l2 in enumerate(items_to_assign):
-            item_pair_score_matrix[i, j] = norm_item_pair_scores.get((l1.lower(), l2.lower()), 0.0)
+            item_pair_score_matrix[i, j] = norm_item_pair_scores.get((l1.lower(), l2.lower()), 
+                                                                     missing_item_pair_norm_score)
 
     # Verify all scores are normalized [0,1]
     arrays_to_check = [
@@ -1426,9 +1431,11 @@ def optimize_layout(config: dict) -> None:
     print_keyboard = config['visualization']['print_keyboard']
     n_layouts = config['optimization'].get('nlayouts', 5)
 
-    # Get scoring weights
+    # Get scoring weights and missing values
     item_weight = config['optimization']['scoring']['item_weight']
     item_pair_weight = config['optimization']['scoring']['item_pair_weight']
+    missing_item_pair_norm_score = config['optimization']['scoring']['missing_item_pair_norm_score']
+    missing_position_pair_norm_score = config['optimization']['scoring']['missing_position_pair_norm_score']
 
     # Validate configuration
     validate_config(config)
@@ -1477,7 +1484,8 @@ def optimize_layout(config: dict) -> None:
     arrays = prepare_arrays(
         items_to_assign, positions_to_assign,
         norm_item_scores, norm_item_pair_scores, 
-        norm_position_scores, norm_position_pair_scores
+        norm_position_scores, norm_position_pair_scores,
+        missing_item_pair_norm_score, missing_position_pair_norm_score
     )
     weights = (item_weight, item_pair_weight)
 
