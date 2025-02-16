@@ -299,6 +299,10 @@ def load_and_normalize_scores(config: dict):
     # Load pair scores if item_pair_weight > 0
     #-------------------------------------------------------------------------
     if item_pair_weight > 0:
+        # Create sets of valid items and positions for validation
+        valid_items = set(items_to_assign.lower())
+        valid_positions = set(positions_to_assign.lower())
+        
         # Load item pair scores
         print("\nLoading item pair scores...")
         item_pair_df = pd.read_csv(config['paths']['input']['item_pair_scores_file'], 
@@ -308,13 +312,23 @@ def load_and_normalize_scores(config: dict):
         print("  - original:", min(scores), "to", max(scores))
         print("  - normalized:", min(norm_scores), "to", max(norm_scores))
         
+        invalid_item_pairs = []
         for idx, row in item_pair_df.iterrows():
             item_pair = row['item_pair']
             if not isinstance(item_pair, str):
                 print(f"Warning: non-string item_pair at index {idx}: {item_pair} of type {type(item_pair)}")
                 continue
             chars = tuple(item_pair.lower())
+            # Verify both characters are valid items
+            if not all(c in valid_items for c in chars):
+                invalid_item_pairs.append((idx, item_pair))
+                continue
             norm_item_pair_scores[chars] = np.float32(norm_scores[idx])
+        
+        if invalid_item_pairs:
+            print("\nWarning: Found invalid item pairs:")
+            for idx, pair in invalid_item_pairs:
+                print(f"  Row {idx}: '{pair}' contains items not in items_to_assign")
 
         # Load position pair scores
         print("\nLoading position pair scores...")
@@ -325,9 +339,19 @@ def load_and_normalize_scores(config: dict):
         print("  - original:", min(scores), "to", max(scores))
         print("  - normalized:", min(norm_scores), "to", max(norm_scores))
         
+        invalid_position_pairs = []
         for idx, row in position_pair_df.iterrows():
             chars = tuple(c.lower() for c in row['position_pair'])
+            # Verify both characters are valid positions
+            if not all(c in valid_positions for c in chars):
+                invalid_position_pairs.append((idx, row['position_pair']))
+                continue
             norm_position_pair_scores[chars] = np.float32(norm_scores[idx])
+            
+        if invalid_position_pairs:
+            print("\nWarning: Found invalid position pairs:")
+            for idx, pair in invalid_position_pairs:
+                print(f"  Row {idx}: '{pair}' contains positions not in positions_to_assign")
 
     return norm_item_scores, norm_item_pair_scores, norm_position_scores, norm_position_pair_scores
    
