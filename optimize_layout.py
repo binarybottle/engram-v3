@@ -901,43 +901,103 @@ def branch_and_bound_optimal_solution(
     item_scores, item_pair_score_matrix, position_score_matrix = arrays
     item_weight, item_pair_weight = weights
     
-    # Initialize empty constraints as empty sets instead of None
+    # Initialize empty constraints if None
     if constrained_items is None:
         constrained_items = set()
     if constrained_positions is None:
         constrained_positions = set()
-        
-    # Convert sets to numpy arrays for numba compatibility
-    constrained_items_array = np.array(list(constrained_items), dtype=np.int32)
-    constrained_positions_array = np.array(list(constrained_positions), dtype=np.int32)
     
     # Track state
     best_score = float('-inf')
     best_mapping = None
     best_components = (0.0, 0.0)
-    current_mapping = np.full(n_items, -1, dtype=np.int32)
-    used_positions = np.zeros(n_positions, dtype=bool)
+    processed_perms = 0
     
     # Statistics
-    processed_perms = 0
     stats = {
         'nodes_explored': 0,
         'nodes_pruned': 0,
         'start_time': time.time()
     }
 
-    def dfs(depth: int) -> None:
-        """Depth-first search with debug logging."""
-        nonlocal best_score, best_mapping, best_components, stats, processed_perms
+    def validate_mapping(mapping: np.ndarray) -> bool:
+        """Validate that mapping satisfies all constraints."""
+        for idx in constrained_items:
+            pos = mapping[idx]
+            if pos >= 0 and pos not in constrained_positions:
+                return False
+        return True
+
+    def phase1_dfs(mapping: np.ndarray, used: np.ndarray, depth: int) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """DFS for Phase 1 (constrained items)."""
+        stats['nodes_explored'] += 1
+        solutions = []
+        
+        # Handle no constraints case
+        if len(constrained_items) == 0:
+            return [(mapping.copy(), used.copy())]
+            
+        # Check if all constrained items are placed
+        if all(mapping[i] >= 0 for i in constrained_items):
+            if validate_mapping(mapping):
+                solutions.append((mapping.copy(), used.copy()))
+            return solutions
+            
+        # Try next constrained item
+        current_item_idx = -1
+        for i in constrained_items:
+            if mapping[i] < 0:
+                current_item_idx = i
+                break
+                
+        if current_item_idx == -1:
+            return solutions
+                
+        # Try each constrained position
+        for pos in constrained_positions:
+            if not used[pos]:
+                new_mapping = mapping.copy()
+                new_used = used.copy()
+                new_mapping[current_item_idx] = pos
+                new_used[pos] = True
+                
+                if debug_print:
+                    print(f"Phase 1: Trying {items_to_assign[current_item_idx]} in {positions_to_assign[pos]}")
+                
+                # Calculate bound for this partial solution
+                bound = calculate_upper_bound(
+                    new_mapping, new_used,
+                    position_score_matrix, item_scores,
+                    item_pair_score_matrix,
+                    item_weight, item_pair_weight,
+                    best_score=best_score,
+                    single_solution=True,
+                    depth=depth
+                )
+                
+                if bound > best_score:
+                    solutions.extend(phase1_dfs(new_mapping, new_used, depth + 1))
+                else:
+                    stats['nodes_pruned'] += 1
+        
+        return solutions
+
+    def phase2_dfs(mapping: np.ndarray, used: np.ndarray, depth: int) -> None:
+        """DFS for Phase 2 (remaining items)."""
+        nonlocal best_score, best_mapping, best_components, processed_perms
         stats['nodes_explored'] += 1
 
-        # Solution found
-        if depth == n_items:
+        # Check if all items are placed
+        if all(mapping[i] >= 0 for i in range(n_items)):
             processed_perms += 1
+            
+            # Validate solution
+            if not validate_mapping(mapping):
+                return
             
             # Calculate score
             score, item_score, pair_score = calculate_score(
-                current_mapping, position_score_matrix,
+                mapping, position_score_matrix,
                 item_scores, item_pair_score_matrix,
                 item_weight, item_pair_weight
             )
@@ -946,27 +1006,30 @@ def branch_and_bound_optimal_solution(
                 print(f"\nComplete solution found:")
                 print(f"  Score: {score:.6f}")
                 print(f"  Current best: {best_score:.6f}")
-                print(f"  Final mapping: {[positions_to_assign[p] for p in current_mapping]}")
+                print(f"  Final mapping: {[positions_to_assign[p] for p in mapping]}")
 
             # Update if better score found
             margin = score - (best_score - np.abs(best_score) * np.finfo(np.float32).eps)
             if margin > 0:
                 best_score = score
-                best_mapping = current_mapping.copy()
+                best_mapping = mapping.copy()
                 best_components = (item_score, pair_score)
                 if debug_print:
                     print("  ACCEPTING NEW BEST")
             return
 
-        # Get next item to place
-        item = get_next_item(current_mapping, constrained_items_array)
-        
+        # Get next unassigned item (skip constrained items as they're already placed)
+        item = -1
+        for i in range(n_items):
+            if mapping[i] < 0 and i not in constrained_items:
+                item = i
+                break
+                
+        if item == -1:  # No more items to place
+            return
+            
         # Get valid positions
-        valid_positions = []
-        if item in constrained_items:
-            valid_positions = [p for p in constrained_positions if not used_positions[p]]
-        else:
-            valid_positions = [p for p in range(n_positions) if not used_positions[p]]
+        valid_positions = [p for p in range(n_positions) if not used[p]]
             
         if debug_print and depth < 2:
             print(f"\nDepth {depth}, placing item {items_to_assign[item]}")
@@ -976,13 +1039,15 @@ def branch_and_bound_optimal_solution(
             if debug_print and depth < 2:
                 print(f"\n  Trying {items_to_assign[item]} in {positions_to_assign[pos]}:")
             
-            # Update mapping and used positions
-            current_mapping[item] = pos
-            used_positions[pos] = True
+            # Create new arrays
+            new_mapping = mapping.copy()
+            new_used = used.copy()
+            new_mapping[item] = pos
+            new_used[pos] = True
             
             # Calculate bound
             bound = calculate_upper_bound(
-                current_mapping, used_positions,
+                new_mapping, new_used,
                 position_score_matrix, item_scores,
                 item_pair_score_matrix,
                 item_weight, item_pair_weight,
@@ -999,24 +1064,38 @@ def branch_and_bound_optimal_solution(
                 print(f"    Decision: {'Explore' if margin > 0 else 'Prune'}")
                 
             if margin > 0:
-                dfs(depth + 1)
+                phase2_dfs(new_mapping, new_used, depth + 1)
             else:
                 stats['nodes_pruned'] += 1
-            
-            # Undo changes for next iteration
-            current_mapping[item] = -1
-            used_positions[pos] = False
 
     # Start search
-    print("\nStarting optimized single-solution search with debug logging...")
-    dfs(0)
+    print("\nStarting optimized single-solution search with two-phase approach...")
+    
+    # Initialize empty mapping and used positions
+    initial_mapping = np.full(n_items, -1, dtype=np.int32)
+    initial_used = np.zeros(n_positions, dtype=bool)
+
+    if constrained_items:
+        # Phase 1: Find all valid arrangements of constrained items
+        print("Phase 1: Arranging constrained items...")
+        phase1_solutions = phase1_dfs(initial_mapping, initial_used, 0)
+        print(f"Found {len(phase1_solutions)} valid phase 1 arrangements")
+        
+        # Phase 2: For each Phase 1 solution, arrange remaining items
+        for idx, (phase1_mapping, phase1_used) in enumerate(phase1_solutions, 1):
+            print(f"Trying Phase 1 solution {idx}/{len(phase1_solutions)}")
+            phase2_dfs(phase1_mapping, phase1_used, 0)
+    else:
+        # No constraints - just do Phase 2
+        print("No constraints - running single-phase optimization")
+        phase2_dfs(initial_mapping, initial_used, 0)
     
     # Print statistics
     elapsed = time.time() - stats['start_time']
     print(f"\nOptimization complete in {elapsed:.2f} seconds")
     print(f"Nodes explored: {stats['nodes_explored']:,}")
     print(f"Nodes pruned: {stats['nodes_pruned']:,}")
-    rate = (stats['nodes_explored'] + stats['nodes_pruned']) / elapsed
+    rate = (stats['nodes_explored'] + stats['nodes_pruned']) / elapsed if elapsed > 0 else 0
     print(f"Processing rate: {rate:,.0f} nodes/second")
     
     # Convert result to mapping dictionary
@@ -1402,22 +1481,27 @@ def optimize_layout(config: dict) -> None:
     )
     weights = (item_weight, item_pair_weight)
 
-    # Prepare constraint sets
-    constrained_items = {i for i, item in enumerate(items_to_assign) 
-                        if item in items_to_constrain.lower()}
-    constrained_positions = {i for i, pos in enumerate(positions_to_assign) 
-                           if pos in positions_to_constrain.upper()}
-
     # Choose optimization strategy based on nlayouts
     if n_layouts == 1:
         print("\nUsing specialized single-solution optimization")
+        
+        # Convert constraint strings to index sets
+        items_to_constrain = config['optimization'].get('items_to_constrain', '').lower()
+        constrained_item_indices = set(i for i, item in enumerate(items_to_assign) 
+                                     if item in items_to_constrain)
+        constrained_position_indices = set(i for i, position in enumerate(positions_to_assign) 
+                                         if position in positions_to_constrain)
+        
+        #print(f"Constrained items: {[items_to_assign[i] for i in constrained_item_indices]}")
+        #print(f"Constrained positions: {[positions_to_assign[i] for i in constrained_position_indices]}")
+        
         best_score, best_mapping, (score1, score2), processed_perms = branch_and_bound_optimal_solution(
             items_to_assign=items_to_assign,
             positions_to_assign=positions_to_assign,
             arrays=arrays,
             weights=weights,
-            constrained_items=constrained_items,
-            constrained_positions=constrained_positions
+            constrained_items=constrained_item_indices,
+            constrained_positions=constrained_position_indices
         )
         
         # Convert to results format
@@ -1433,7 +1517,7 @@ def optimize_layout(config: dict) -> None:
         
     else:
         print(f"\nFinding top {n_layouts} solutions using branch and bound:")
-        if constrained_items:
+        if items_to_constrain:
             print(f"  - {len(items_to_constrain)} constrained items: {items_to_constrain}")
             print(f"  - {len(positions_to_constrain)} constrained positions: {positions_to_constrain}")
 

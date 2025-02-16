@@ -1,4 +1,9 @@
-Left home block of 12 positions in descending comfort order: FDSVERAWCQXZ
+English letters in descending frequency order:
+    etaoinsrhldcumfpgwybvkxjqz
+
+Home block of 12 positions in left/right descending comfort order: 
+    FDSVERAWCQXZ JKLMIU;O,P./  (alternating: FJDKSLVMEIRUA;WOC,QPX.Z/)
+ 
 items in descending frequency: etaoinsrhldcumfpgwybvkxjqz
 Vowels/consonants: eaoiu / tnsrhldc mfpgwybvkxj [qz]
 Most comfortable positions (left/right): FDSVERAW / JKLMIU;O
