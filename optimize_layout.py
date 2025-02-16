@@ -321,6 +321,9 @@ def load_and_normalize_scores(config: dict):
             if not isinstance(item_pair, str):
                 print(f"Warning: non-string item_pair at index {idx}: {item_pair} of type {type(item_pair)}")
                 continue
+            if len(item_pair) != 2:
+                print(f"Warning: item_pair at index {idx} must be exactly 2 characters: '{item_pair}'")
+                continue
             chars = tuple(item_pair.lower())
             # Verify both characters exist in item scores file
             if not all(c in valid_items for c in chars):
@@ -350,7 +353,14 @@ def load_and_normalize_scores(config: dict):
         
         invalid_position_pairs = []
         for idx, row in position_pair_df.iterrows():
-            chars = tuple(c.lower() for c in row['position_pair'])
+            position_pair = row['position_pair']
+            if not isinstance(position_pair, str):
+                print(f"Warning: non-string position_pair at index {idx}: {position_pair} of type {type(position_pair)}")
+                continue
+            if len(position_pair) != 2:
+                print(f"Warning: position_pair at index {idx} must be exactly 2 characters: '{position_pair}'")
+                continue
+            chars = tuple(c.lower() for c in position_pair)
             # Verify both positions exist in position scores file
             if not all(c in valid_positions for c in chars):
                 invalid_position_pairs.append((idx, row['position_pair']))
