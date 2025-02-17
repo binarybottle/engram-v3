@@ -1234,7 +1234,7 @@ def branch_and_bound_optimal_nsolutions(
     
     item_scores, item_pair_score_matrix, position_score_matrix = arrays
     item_weight, item_pair_weight = weights
-    
+
     # Initialize search structures
     solutions = []  # Will store (score, unweighted_scores, mapping) tuples
     worst_top_n_score = float('-inf')
@@ -1245,12 +1245,12 @@ def branch_and_bound_optimal_nsolutions(
 
     # Track statistics
     processed_perms = 0
-    pruning_stats = {
-        'depth': defaultdict(int),  # Count pruned branches by depth
-        'margin': [],               # Track pruning margins (diff between upper bound and worst score)
-        'total_pruned': 0,
-        'total_explored': 0
-    }
+    #pruning_stats = {
+        #'depth': defaultdict(int),  # Count pruned branches by depth
+        #'margin': [],               # Track pruning margins (diff between upper bound and worst score)
+        #'total_pruned': 0,
+        #'total_explored': 0
+    #}
 
     # Handle pre-assigned items
     if items_assigned:
@@ -1335,12 +1335,13 @@ def branch_and_bound_optimal_nsolutions(
 
         # Process complete solutions
         if depth == n_items_to_assign:
+            processed_perms += 1
+            if processed_perms % 1000 == 0:  # Only update every 1000 permutations
+                pbar.update(1000)
+
             if n_constrained:
                 if not validate_mapping(mapping, constrained_item_indices, constrained_positions):
                     return
-
-            processed_perms += 1
-            pbar.update(1)
             
             total_score, item_component, item_pair_component = calculate_score(
                 mapping,
@@ -1405,11 +1406,11 @@ def branch_and_bound_optimal_nsolutions(
                 
                 margin = upper_bound - worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps
                 if margin < 0:  # We can safely prune
-                    pruning_stats['depth'][depth] += 1
-                    pruning_stats['margin'].append(margin)
-                    pruning_stats['total_pruned'] += 1
+                    #pruning_stats['depth'][depth] += 1
+                    #pruning_stats['margin'].append(margin)
+                    #pruning_stats['total_pruned'] += 1
                     continue
-                pruning_stats['total_explored'] += 1
+                #pruning_stats['total_explored'] += 1
 
             # Recursien:
             phase2_dfs(new_mapping, new_used, depth + 1, pbar)
@@ -1428,7 +1429,7 @@ def branch_and_bound_optimal_nsolutions(
     #-------------------------------------------------------------------------
     current_phase1_solution_index = 0
 
-    with tqdm(total=total_perms_phase2, desc="Phase 2", unit='perms') as pbar:
+    with tqdm(total=total_perms_phase2//1000, desc="Phase 2", unit='Kperms') as pbar:
         if n_constrained:
             for phase1_mapping, phase1_used in phase1_solutions:
                 print(f"\nProcessing Phase 1 solution {current_phase1_solution_index + 1}/{len(phase1_solutions)}")
@@ -1463,19 +1464,19 @@ def branch_and_bound_optimal_nsolutions(
         ))
 
     # Print pruning statistics
-    print("\nPruning statistics:")
-    print(f"Total nodes explored: {pruning_stats['total_explored']:,}")
-    print(f"Total branches pruned: {pruning_stats['total_pruned']:,}")
-    print("Pruning by depth:")
-    for depth in sorted(pruning_stats['depth'].keys()):
-        count = pruning_stats['depth'][depth]
-        print(f"  Depth {depth}: {count:,} branches pruned")
-    if pruning_stats['margin']:  # Only if we have margins to report
-        margins = np.array(pruning_stats['margin'])
-        print("Pruning margins:")
-        print(f"  Min: {np.min(margins):.6f}")
-        print(f"  Max: {np.max(margins):.6f}")
-        print(f"  Mean: {np.mean(margins):.6f}")
+    #print("\nPruning statistics:")
+    #print(f"Total nodes explored: {pruning_stats['total_explored']:,}")
+    #print(f"Total branches pruned: {pruning_stats['total_pruned']:,}")
+    #print("Pruning by depth:")
+    #for depth in sorted(pruning_stats['depth'].keys()):
+    #    count = pruning_stats['depth'][depth]
+    #    print(f"  Depth {depth}: {count:,} branches pruned")
+    #if pruning_stats['margin']:  # Only if we have margins to report
+    #    margins = np.array(pruning_stats['margin'])
+    #    print("Pruning margins:")
+    #    print(f"  Min: {np.min(margins):.6f}")
+    #    print(f"  Max: {np.max(margins):.6f}")
+    #    print(f"  Mean: {np.mean(margins):.6f}")
 
     return return_solutions, processed_perms
 

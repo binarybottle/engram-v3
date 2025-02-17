@@ -18,11 +18,14 @@ paths:
 #-----------------------------------------------------------------------
 optimization:
 
-  #items_to_assign:     "etaoinsrhldcu" #"mfpgwybvkxjqz" # items to arrange in positions
-  #positions_to_assign: "FJDKSLVMEIRUA" #";WOC,QPX.Z/" # available positions
-
   items_to_assign:     "etaoinsrhldcu" #"mfpgwybvkxjqz" # items to arrange in positions
-  positions_to_assign: "FJDKSLVMEIRUA;WO" #OC,QPX.Z/" # available positions
+  positions_to_assign: "FJDKSLVMEIRUA;" #";WOC,QPX.Z/" # available positions
+
+  #items_to_assign:     "etaoinsrhldcu" #"mfpgwybvkxjqz" # items to arrange in positions
+  #positions_to_assign: "FJDKSLVMEIRUA;W" #OC,QPX.Z/" # available positions
+
+  #items_to_assign:     "etaoinsrhldcu" #"mfpgwybvkxjqz" # items to arrange in positions
+  #positions_to_assign: "FJDKSLVMEIRUA;WO" #C,QPX.Z/" # available positions
 
   items_to_constrain:    "et"         # Subset of items_to_assign to arrange within positions_to_constrain
   positions_to_constrain: "FJDK"       # Subset of positions_to_assign to constrain arrangement of items_to_constrain
@@ -36,7 +39,7 @@ optimization:
     missing_item_pair_norm_score: 1.0
     missing_position_pair_norm_score: 1.0
 
-  nlayouts: 1                          # Number of top layouts to display and save
+  nlayouts: 100                          # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Visualization Settings
