@@ -16,30 +16,23 @@ paths:
 #-----------------------------------------------------------------------
 # Optimization Settings
 #-----------------------------------------------------------------------
-optimization:
+optimization:  # etaoinsrhldcumfpgwybvkxjqz in FDSVERAWCQXZ JKLMIU;O,P./
+  items_to_assign:      "aoinsrhldcumfpgw"  # items to arrange in positions
+  positions_to_assign:  "DSVERAWQKLMIU;OP"  # available positions
 
-  items_to_assign:     "etaoinsrhldcu" #"mfpgwybvkxjqz" # items to arrange in positions
-  positions_to_assign: "FJDKSLVMEIRUA;" #";WOC,QPX.Z/" # available positions
+  items_to_constrain:      "aoiu"          # Subset of items_to_assign to arrange within positions_to_constrain
+  positions_to_constrain:  "DSVERAWQ"      # Subset of positions_to_assign to constrain arrangement of items_to_constrain
 
-  #items_to_assign:     "etaoinsrhldcu" #"mfpgwybvkxjqz" # items to arrange in positions
-  #positions_to_assign: "FJDKSLVMEIRUA;W" #OC,QPX.Z/" # available positions
-
-  #items_to_assign:     "etaoinsrhldcu" #"mfpgwybvkxjqz" # items to arrange in positions
-  #positions_to_assign: "FJDKSLVMEIRUA;WO" #C,QPX.Z/" # available positions
-
-  items_to_constrain:    "et"         # Subset of items_to_assign to arrange within positions_to_constrain
-  positions_to_constrain: "FJDK"       # Subset of positions_to_assign to constrain arrangement of items_to_constrain
-
-  items_assigned:        ""            # Items already assigned to positions
-  positions_assigned:    ""            # Positions that are already filled 
+  items_assigned:      "et"                # Items already assigned to positions
+  positions_assigned:  "FJ"                # Positions that are already filled 
 
   scoring:  
-    item_weight: 0.5                   # Weight for single-item scoring
-    item_pair_weight: 0.5              # Weight for item_pair scoring
+    item_weight: 0.5                       # Weight for single-item scoring
+    item_pair_weight: 0.5                  # Weight for item_pair scoring
     missing_item_pair_norm_score: 1.0
     missing_position_pair_norm_score: 1.0
 
-  nlayouts: 100                          # Number of top layouts to display and save
+  nlayouts: 1                              # Number of top layouts to display and save
 
 #-----------------------------------------------------------------------
 # Visualization Settings

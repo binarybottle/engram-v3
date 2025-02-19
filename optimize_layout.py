@@ -569,14 +569,14 @@ def calculate_total_perms(
     if n_constrained_items == 0 or n_constrained_positions == 0:
         # No constraints - everything happens in Phase 2
         total_perms_phase1 = 1
-        remaining_items = n_items - len(items_assigned)
-        remaining_positions = n_positions - len(positions_assigned)
+        remaining_items = n_items
+        remaining_positions = n_positions
     else:
         # Calculate Phase 1 permutations
         total_perms_phase1 = perm(n_constrained_positions, n_constrained_items)
         # After Phase 1, we have used n_constrained_items positions
-        remaining_items = n_items - n_constrained_items - len(items_assigned)
-        remaining_positions = n_positions - n_constrained_items - len(positions_assigned)
+        remaining_items = n_items - n_constrained_items
+        remaining_positions = n_positions - n_constrained_items
     
     # Phase 2: For each Phase 1 solution, arrange remaining items
     perms_per_phase1 = perm(remaining_positions, remaining_items)
