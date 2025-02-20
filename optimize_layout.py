@@ -1284,8 +1284,8 @@ def branch_and_bound_optimal_nsolutions(
         n_constrained = 0
         total_perms_phase1 = 0
 
-    n_phase2_remaining_items = n_items_to_assign - n_constrained - len(items_assigned)
-    n_phase2_available_positions = n_positions_to_assign - n_constrained - len(items_assigned)
+    n_phase2_remaining_items = n_items_to_assign - n_constrained
+    n_phase2_available_positions = n_positions_to_assign - n_constrained
     n_perms_per_phase1_solution = perm(n_phase2_available_positions, n_phase2_remaining_items)
     total_perms_phase2 = n_perms_per_phase1_solution * total_perms_phase1
 
