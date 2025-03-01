@@ -234,15 +234,15 @@ def detect_and_normalize_distribution(scores: np.ndarray, name: str = '') -> np.
     if len(scores[scores == 0]) / len(scores) > 0.3:
         # Sparse distribution with many zeros
         print(f"{name}: Sparse distribution detected")
-        adjusted_scores = np.where(scores > 0, scores, min_nonzero / 10)
-        log_scores = np.log10(adjusted_scores)
-        return (log_scores - np.min(log_scores)) / (np.max(log_scores) - np.min(log_scores))
-    
+        #adjusted_scores = np.where(scores > 0, scores, min_nonzero / 10)
+        norm_scores = np.sqrt(scores)  #np.log10(adjusted_scores)  
+        return (norm_scores - np.min(norm_scores)) / (np.max(norm_scores) - np.min(norm_scores))
+
     elif skew > 2 or np.median(ratios) > 1.5:
         # Heavy-tailed/exponential/zipfian distribution
         print(f"{name}: Heavy-tailed distribution detected")
-        log_scores = np.log10(scores + min_nonzero/10)
-        return (log_scores - np.min(log_scores)) / (np.max(log_scores) - np.min(log_scores))
+        norm_scores = np.sqrt(np.abs(scores))  #np.log10(scores + min_nonzero/10)
+        return (norm_scores - np.min(norm_scores)) / (np.max(norm_scores) - np.min(norm_scores))
         
     elif abs(mean - median) / mean < 0.1:
         # Roughly symmetric distribution
@@ -715,6 +715,57 @@ def calculate_score(
     total_score = float(item_weight * item_component + item_pair_weight * item_pair_component)
     
     return total_score, item_component, item_pair_component
+
+def calculate_cross_interactions(
+    mapping: np.ndarray,
+    items_to_assign: str,
+    positions_to_assign: str,
+    items_assigned: str,
+    positions_assigned: str,
+    norm_item_pair_scores: Dict[Tuple[str, str], float],
+    norm_position_pair_scores: Dict[Tuple[str, str], float],
+    missing_item_pair_norm_score: float = 0.0,
+    missing_position_pair_norm_score: float = 0.0
+) -> float:
+    """Calculate interaction scores between fixed items and items being optimized."""
+    if not items_assigned or not positions_assigned:
+        return 0.0
+        
+    cross_score = 0.0
+    interaction_count = 0
+    
+    for i, item1 in enumerate(items_to_assign):
+        pos1_idx = mapping[i]
+        if pos1_idx < 0:  # Skip if not assigned yet
+            continue
+            
+        pos1 = positions_to_assign[pos1_idx]
+        
+        for j, item2 in enumerate(items_assigned):
+            pos2 = positions_assigned[j]
+            
+            # Forward interaction (assigned → fixed)
+            pair_key = (item1.lower(), item2.lower())
+            pos_key = (pos1.lower(), pos2.lower())
+            
+            pair_score = norm_item_pair_scores.get(pair_key, missing_item_pair_norm_score)
+            pos_score = norm_position_pair_scores.get(pos_key, missing_position_pair_norm_score)
+            
+            cross_score += pos_score * pair_score
+            
+            # Backward interaction (fixed → assigned)
+            reverse_pair_key = (item2.lower(), item1.lower())
+            reverse_pos_key = (pos2.lower(), pos1.lower())
+            
+            reverse_pair_score = norm_item_pair_scores.get(reverse_pair_key, missing_item_pair_norm_score)
+            reverse_pos_score = norm_position_pair_scores.get(reverse_pos_key, missing_position_pair_norm_score)
+            
+            cross_score += reverse_pos_score * reverse_pair_score
+            
+            interaction_count += 2  # Count both directions
+    
+    # Normalize
+    return cross_score / interaction_count if interaction_count > 0 else 0.0
             
 @jit(nopython=True, fastmath=True)
 def calculate_upper_bound(
@@ -942,6 +993,12 @@ def branch_and_bound_optimal_solution(
     weights: Tuple[float, float],
     constrained_items: Set[int] = None,
     constrained_positions: Set[int] = None,
+    items_assigned: str = '',
+    positions_assigned: str = '',
+    norm_item_pair_scores: Dict = None,
+    norm_position_pair_scores: Dict = None,
+    missing_item_pair_norm_score: float = 0.0,
+    missing_position_pair_norm_score: float = 0.0,
     pbar: tqdm = None
 ) -> Tuple[float, Dict[str, str], Tuple[float, float], int]:
     """Find optimal single solution using aggressive pruning with debug logging."""
@@ -1075,6 +1132,21 @@ def branch_and_bound_optimal_solution(
                 item_weight, item_pair_weight
             )
             
+            # Add cross-interaction component
+            if items_assigned and norm_item_pair_scores and norm_position_pair_scores:
+                cross_score = calculate_cross_interactions(
+                    mapping,
+                    items_to_assign, positions_to_assign,
+                    items_assigned, positions_assigned,
+                    norm_item_pair_scores, norm_position_pair_scores,
+                    missing_item_pair_norm_score, missing_position_pair_norm_score
+                )
+                # Apply weight and add to total
+                cross_weighted = cross_score * item_pair_weight
+                score += cross_weighted
+                # Optionally update pair score for reporting purposes
+                pair_score = (pair_score + cross_score) / 2
+            
             if debug_print:
                 print(f"\nComplete solution found:")
                 print(f"  Score: {score:.6f}")
@@ -1183,7 +1255,11 @@ def branch_and_bound_optimal_nsolutions(
     arrays: tuple,
     weights: tuple,
     config: dict,
-    n_solutions: int = 5
+    n_solutions: int = 5,
+    norm_item_pair_scores: Dict = None,
+    norm_position_pair_scores: Dict = None,
+    missing_item_pair_norm_score: float = 0.0,
+    missing_position_pair_norm_score: float = 0.0
 ) -> List[Tuple[float, Dict[str, str], Dict]]:
     """
     Branch and bound implementation using depth-first search. 
@@ -1351,6 +1427,18 @@ def branch_and_bound_optimal_nsolutions(
                 item_weight,
                 item_pair_weight
             )
+
+            # cross-interaction component
+            if items_assigned and norm_item_pair_scores and norm_position_pair_scores:
+                cross_score = calculate_cross_interactions(
+                    mapping,
+                    items_to_assign, positions_to_assign,
+                    items_assigned, positions_assigned,
+                    norm_item_pair_scores, norm_position_pair_scores,
+                    missing_item_pair_norm_score, missing_position_pair_norm_score
+                )
+                # Apply weight and add to total
+                total_score += cross_score * item_pair_weight
 
             margin = total_score - (worst_top_n_score - np.abs(worst_top_n_score) * np.finfo(np.float32).eps)
             if len(solutions) < n_solutions or margin > 0:
@@ -1565,14 +1653,14 @@ def optimize_layout(config: dict) -> None:
         # Convert constraint strings to index sets
         items_to_constrain = config['optimization'].get('items_to_constrain', '').lower()
         constrained_item_indices = set(i for i, item in enumerate(items_to_assign) 
-                                     if item in items_to_constrain)
+                                    if item in items_to_constrain)
         constrained_position_indices = set(i for i, position in enumerate(positions_to_assign) 
-                                         if position in positions_to_constrain)
+                                        if position in positions_to_constrain)
 
         # Set up progress bar for single solution search
         with tqdm(total=search_space['total_perms'], 
-                 desc="Optimizing layout", 
-                 unit='perms') as pbar:
+                desc="Optimizing layout", 
+                unit='perms') as pbar:
             best_score, best_mapping, (score1, score2), processed_perms = branch_and_bound_optimal_solution(
                 items_to_assign=items_to_assign,
                 positions_to_assign=positions_to_assign,
@@ -1580,6 +1668,12 @@ def optimize_layout(config: dict) -> None:
                 weights=weights,
                 constrained_items=constrained_item_indices,
                 constrained_positions=constrained_position_indices,
+                items_assigned=items_assigned,
+                positions_assigned=positions_assigned,
+                norm_item_pair_scores=norm_item_pair_scores,
+                norm_position_pair_scores=norm_position_pair_scores,
+                missing_item_pair_norm_score=missing_item_pair_norm_score,
+                missing_position_pair_norm_score=missing_position_pair_norm_score,
                 pbar=pbar  # Pass progress bar to function
             )
 
@@ -1605,7 +1699,11 @@ def optimize_layout(config: dict) -> None:
             arrays=arrays,
             weights=weights,
             config=config,
-            n_solutions=n_layouts
+            n_solutions=n_layouts,
+            norm_item_pair_scores=norm_item_pair_scores,
+            norm_position_pair_scores=norm_position_pair_scores,
+            missing_item_pair_norm_score=missing_item_pair_norm_score,
+            missing_position_pair_norm_score=missing_position_pair_norm_score
         )
         
         # Sort results
