@@ -88,3 +88,92 @@ as well as text strings that represent items/positions to arrange or constrain:
   - Optional visual mapping of layouts as a partial keyboard:
     - ASCII art visualization of the layout
     - Clear marking of constrained positions
+
+
+## Running parallel processes on an NSF ACCESS cluster
+
+### Set up the code environment on Bridges-2
+```
+# Log in to Bridges-2
+ssh username@bridges2.psc.edu
+
+# Create a directory for the project
+mkdir -p keyboard_optimizer
+cd keyboard_optimizer
+
+# Clone the repository if git is available
+git clone https://github.com/binarybottle/optimize_layouts.git
+
+# If git is not available, create the file structure manually
+mkdir -p optimize_layouts
+mkdir -p optimize_layouts/input
+mkdir -p optimize_layouts/output/layouts
+```
+
+### Install required Python packages
+```
+# Load Python module on Bridges-2
+module load python/3.9.0
+
+# Create a virtual environment
+python -m venv keyboard_env
+source keyboard_env/bin/activate
+
+# Install required packages
+pip install pyyaml numpy pandas tqdm numba psutil matplotlib
+```
+
+### Run the scripts on Bridges-2
+```
+cd ~/keyboard_optimizer/optimize_layouts
+
+# Make the scripts executable
+chmod +x generate_configs.py
+chmod +x run_keyboard_optimization.sh
+
+# Generate 1,000 configurations
+python generate_configs.py
+
+# Replace <YOUR_ALLOCATION_ID> with your actual allocation ID
+# You can find this using the 'projects' command
+sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' run_keyboard_optimization.sh  # Replace abc123 with your allocation ID
+
+# Submit the job to the scheduler
+sbatch run_keyboard_optimization.sh
+```
+
+### Monitoring jobs
+```
+# Check all your running jobs
+squeue -u $USER
+
+# Check a specific job array status
+squeue -j <job_array_id>
+
+# See how many jobs are running vs. pending
+squeue -j <job_array_id> | awk '{print $5}' | sort | uniq -c
+
+# View detailed information about a job
+scontrol show job <job_id>
+
+# Check estimated start time for pending jobs
+squeue -j <job_array_id> --start
+```
+
+### Resumine failed jobs
+```
+# Create a list of failed job indices
+find output/layouts -name "job_failed.txt" | grep -o "config_[0-9]*" | cut -d'_' -f2 > failed_jobs.txt
+
+# Submit only the failed jobs
+sbatch --array=$(tr '\n' ',' < failed_jobs.txt) run_keyboard_optimization.sh
+```
+
+### Analyze the results
+```
+# Check if all jobs are done
+ls -l output/layouts/config_*/job_completed.txt | wc -l
+
+# Run the analysis
+python analyze_results.py --top 10
+```
