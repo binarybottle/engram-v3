@@ -3,13 +3,19 @@
 Generate keyboard optimization configurations with specific letter-to-key constraints.
 Each configuration will have a unique assignment of letters to positions based on constraints.
 
+This is step 2 of:
+1. Generate configurations to test whether vowels aggregate to one hand (side of the keyboard).
+2. Generate configurations to determine 20 letter-to-key assignments with vowels on the left.
+3. Generate configurations to determine 24 letter-to-key assignments, 
+   fixing the 10 most frequent letters and optimally arranging the 14 least-frequent letters.
+
 Constraints:
 - items_to_assign is always "nsrhldcmfpgwyb" (14 letters)
 - items_assigned is always "etaoiu" (6 letters)
 - e will always be assigned to qwerty key D or F
 - t will always be assigned to qwerty key J or K
-- u will be assigned to any of the qwerty keys QWERACV
-- a, o, and i can be in any of the qwerty keys WERASDFCV
+- u will be assigned to any of the qwerty keys QWERASDFCV
+- a, o, and i can be in any of the qwerty keys QWERASDFCV
 - positions_to_assign will be 14 of the 20 qwerty keys 
   "FDSVERAWCQJKLMIU;O,P" that are not in positions_assigned
 """
@@ -32,10 +38,10 @@ def generate_constraint_sets():
     items_assigned = "etaoiu"  # 6 letters
     
     # Position constraints
-    e_positions = ["D", "F"]
-    t_positions = ["J", "K"]
-    u_positions = ["Q", "W", "E", "R", "A", "C", "V"]
-    aoi_positions = ["W", "E", "R", "A", "S", "D", "F", "C", "V"]
+    e_positions   = ["D", "F"]
+    t_positions   = ["J", "K"]
+    u_positions   = ["Q", "W", "E", "R", "A", "S", "D", "F", "C", "V"]
+    aoi_positions = ["Q", "W", "E", "R", "A", "S", "D", "F", "C", "V"]
     
     # Generate all valid configurations
     configs = []
