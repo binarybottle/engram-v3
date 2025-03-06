@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from numba import jit
 import csv
 from collections import defaultdict
-import pickle
+import argparse
 
 #-----------------------------------------------------------------------------
 # Loading, validating, and saving functions
@@ -1740,10 +1740,16 @@ def optimize_layout(config: dict) -> None:
     
 if __name__ == "__main__":
     try:
+        # Parse command line arguments
+        parser = argparse.ArgumentParser(description='Optimize keyboard layout.')
+        parser.add_argument('--config', type=str, default='config.yaml',
+                           help='Path to configuration file (default: config.yaml)')
+        args = parser.parse_args()
+        
         start_time = time.time()
 
-        # Load configuration
-        config = load_config('config.yaml')
+        # Load configuration from specified path
+        config = load_config(args.config)
     
         # Optimize the layout
         optimize_layout(config)
