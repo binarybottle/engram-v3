@@ -131,12 +131,13 @@ cd ~/keyboard_optimizer/optimize_layouts
 chmod +x generate_configs.py
 chmod +x run_keyboard_optimization.sh
 
-# Generate 1,000 configurations
+# Generate configuration files
 python generate_configs.py
 
 # Replace <YOUR_ALLOCATION_ID> with your actual allocation ID
-# You can find this using the 'projects' command
-sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' run_keyboard_optimization.sh  # Replace abc123 with your allocation ID
+# In the code below, replace abc123 with your allocation ID
+# (you can find this using the 'projects' command):
+sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' run_keyboard_optimization.sh
 
 # Submit the job to the scheduler
 sbatch run_keyboard_optimization.sh
