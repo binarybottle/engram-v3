@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --time=08:00:00            # Time limit (max hours per job)
-#SBATCH --array=0-1%2              # Job array: #configs %simultaneous jobs # trial: 0-1%2 configs1: 0-13439%100 configs2: 0-12095%100
+#SBATCH --array=1-2%2              # Job array: #configs %simultaneous jobs # trial: 1-2%2 configs1: 1-13440%100 configs2: 1-12096%100
 #SBATCH --ntasks-per-node=1        # Run one task per job
 #SBATCH --cpus-per-task=2          # Cores per optimization process
 #SBATCH --mem=2GB                  # Memory per job

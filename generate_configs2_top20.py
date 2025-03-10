@@ -154,8 +154,8 @@ def create_config_files(configs):
         config['optimization']['nlayouts'] = 100
         
         # Set up unique output path
-        config['paths']['output']['layout_results_folder'] = f"output/layouts/config_{i}"
-        os.makedirs(config['paths']['output']['layout_results_folder'], exist_ok=True)
+        #config['paths']['output']['layout_results_folder'] = f"output/layouts/config_{i}"
+        #os.makedirs(config['paths']['output']['layout_results_folder'], exist_ok=True)
         
         # Write the configuration to a YAML file
         config_filename = f"{OUTPUT_DIR}/config_{i}.yaml"

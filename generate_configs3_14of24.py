@@ -316,8 +316,8 @@ def create_config_files(configs, output_subdir=""):
             config_filename = f"{output_dir}/step3_top_{i}.yaml"
         
         # Set output folder in config
-        config['paths']['output']['layout_results_folder'] = output_folder
-        os.makedirs(output_folder, exist_ok=True)
+        #config['paths']['output']['layout_results_folder'] = output_folder
+        #os.makedirs(output_folder, exist_ok=True)
         
         # Write the configuration to a YAML file
         with open(config_filename, 'w') as f:
