@@ -10,19 +10,20 @@ See README for more details.
 
 Usage: python optimize_layout.py
 """
-import os
-import pandas as pd
-import numpy as np
 import yaml
-from typing import List, Dict, Tuple, Set
-from math import perm
+import numpy as np
+import pandas as pd
+from numba import jit
 from tqdm import tqdm
 import psutil
+
+import os
+from math import perm
 import time
 from datetime import datetime, timedelta
-from numba import jit
 import csv
 from collections import defaultdict
+from typing import List, Dict, Tuple, Set
 import argparse
 
 #-----------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --time=08:00:00            # Time limit (max hours per job)
-#SBATCH --array=0-6383%100         # Job array: #configs %simultaneous jobs
+#SBATCH --array=0-1%2              # Job array: #configs %simultaneous jobs # trial: 0-1%2 configs1: 0-13439%100 configs2: 0-12095%100
 #SBATCH --ntasks-per-node=1        # Run one task per job
 #SBATCH --cpus-per-task=2          # Cores per optimization process
-#SBATCH --mem=4GB                  # Memory per job
+#SBATCH --mem=2GB                  # Memory per job
 #SBATCH --job-name=layouts         # Job name
 #SBATCH --output=layouts_%A_%a.out # Output file with job and array IDs
 #SBATCH --error=layouts_%A_%a.err  # Error file with job and array IDs
@@ -12,7 +12,7 @@
 
 # Load required modules
 module purge
-module load python/3.9.0
+module load python/3.8.6
 
 # Activate virtual environment
 source $HOME/keyboard_optimizer/keyboard_env/bin/activate

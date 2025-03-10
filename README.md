@@ -113,7 +113,7 @@ mkdir -p optimize_layouts/output/layouts
 ### Install required Python packages
 ```
 # Load Python module on Bridges-2
-module load python/3.9.0
+module load python/3.8.6
 
 # Create a virtual environment
 python -m venv keyboard_env
@@ -128,19 +128,19 @@ pip install pyyaml numpy pandas tqdm numba psutil matplotlib
 cd ~/keyboard_optimizer/optimize_layouts
 
 # Make the scripts executable
-chmod +x generate_configs.py
-chmod +x run_keyboard_optimization.sh
+#chmod +x generate_configs.py
+chmod +x run_parallel_optimizations.sh
 
 # Generate configuration files
-python generate_configs.py
+#python generate_configs.py
 
 # Replace <YOUR_ALLOCATION_ID> with your actual allocation ID
 # In the code below, replace abc123 with your allocation ID
 # (you can find this using the 'projects' command):
-sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' run_keyboard_optimization.sh
+sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' run_parallel_optimizations.sh
 
 # Submit the job to the scheduler
-sbatch run_keyboard_optimization.sh
+sbatch run_parallel_optimizations.sh
 ```
 
 ### Monitoring jobs
