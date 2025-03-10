@@ -777,7 +777,7 @@ def calculate_upper_bound(
     item_pair_score_matrix: np.ndarray,
     item_weight: float,
     item_pair_weight: float,
-    best_score: float = float('-inf'),
+    best_score: float = np.float32(-np.inf),
     single_solution: bool = False,
     depth: int = None
 ) -> float:
@@ -895,7 +895,7 @@ def calculate_upper_bound(
         p_pos = mapping[p_item]
         for u_item in unplaced:
             # Initialize best_sum before using it in max()
-            best_sum = float('-inf')
+            best_sum = np.float32(-np.inf)
             for pos in available:
                 score1 = item_pair_score_matrix[p_item, u_item] * position_score_matrix[p_pos, pos]
                 score2 = item_pair_score_matrix[u_item, p_item] * position_score_matrix[pos, p_pos]
@@ -1018,7 +1018,7 @@ def branch_and_bound_optimal_solution(
         constrained_positions = set()
     
     # Track state
-    best_score = float('-inf')
+    best_score = np.float32(-np.inf)
     best_mapping = None
     best_components = (0.0, 0.0)
     processed_perms = 0
@@ -1314,7 +1314,7 @@ def branch_and_bound_optimal_nsolutions(
 
     # Initialize search structures
     solutions = []  # Will store (score, unweighted_scores, mapping) tuples
-    worst_top_n_score = float('-inf')
+    worst_top_n_score = np.float32(-np.inf)
     
     # Initialize mapping and used positions
     initial_mapping = np.full(n_items_to_assign, -1, dtype=np.int32)
