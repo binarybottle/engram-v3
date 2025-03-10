@@ -51,6 +51,20 @@ nsrhldcmfpgwyb in any remaining top-20 keys:
 │     │     │  C  │  V  ║  M  │  ,  │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
+There are 12,096 valid configurations based on the constraints.
+
+Example configuration:
+  items_assigned: etaoiu
+  positions_assigned: DJWERQ
+  positions_to_assign: FSVACKLMIU;O,P
+  Letter mappings:
+    e -> D
+    t -> J
+    a -> W
+    o -> E
+    i -> R
+    u -> Q
+
 """
 import os
 import yaml
