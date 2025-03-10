@@ -10,12 +10,12 @@ This is step 1 of:
 3. Optimally arrange letters in the least comfortable of 24 keys.
 
 Constraints:
-- items_to_assign is always "nsrhldcmfpgwyb" (14 letters)
-- items_assigned is always "etaoiu" (6 letters)
+- items_to_assign is always "nsrhldcumfpgw" (13 letters)
+- items_assigned is always "etaoi" (5 letters)
 - e will always be assigned to qwerty key D or F
 - t will always be assigned to qwerty key J or K
-- aoiu can be in any of the 20 most comfortable keys: "FDSVERAWCQJKLMIU;O,P"
-- positions_to_assign: 14 of the remaining 20 keys
+- aoi can be in any of the 18 most comfortable keys: "FDSVERAWCJKLMIU;O,"
+- positions_to_assign: 13 of the remaining 18 keys
 
 Step 1a: positions_assigned
 ---------------------------
@@ -30,10 +30,10 @@ e in key D/F, t in key J/K:
 
 Step 1b: positions_assigned
 ---------------------------
-aoiu in any of the top-20 (most comfortable) keys, 
+aoi in any of the top-18 (most comfortable) keys, 
 except where e and t are already assigned:
 ╭───────────────────────────────────────────────╮
-│  Q  │  W  │  E  │  R  ║  U  │  I  │  O  │  P  │
+│     │  W  │  E  │  R  ║  U  │  I  │  O  │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
 │  A  │  S  │  D  │  F  ║  J  │  K  │  L  │  ;  │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
@@ -42,14 +42,27 @@ except where e and t are already assigned:
 
 Step 1c: positions_to_assign 
 ----------------------------
-nsrhldcmfpgwyb in any remaining top-20 keys:
+nsrhldcumfpgw in any remaining top-18 keys:
 ╭───────────────────────────────────────────────╮
-│  Q  │  W  │  E  │  R  ║  U  │  I  │  O  │  P  │
+│     │  W  │  E  │  R  ║  U  │  I  │  O  │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
 │  A  │  S  │  D  │  F  ║  J  │  K  │  L  │  ;  │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
 │     │     │  C  │  V  ║  M  │  ,  │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
+
+There are 13,440 valid configurations based on the constraints.
+
+Example configuration:
+  items_assigned: etaoi
+  positions_assigned: DJFSV
+  positions_to_assign: ERAWCKLMIU;O,
+  Letter mappings:
+    e -> D
+    t -> J
+    a -> F
+    o -> S
+    i -> V
 
 """
 import os
@@ -58,7 +71,7 @@ import itertools
 
 # Configuration
 OUTPUT_DIR = 'configs'
-ALL_KEYS = "FDSVERAWCQJKLMIU;O,P"  # 20 most comfortable keys
+ALL_KEYS = "FDSVERAWCJKLMIU;O,"  # 18 most comfortable keys
 
 # Base configuration from the original config file
 with open('config.yaml', 'r') as f:
@@ -67,14 +80,15 @@ with open('config.yaml', 'r') as f:
 def generate_constraint_sets():
     """Generate all valid configurations based on the constraints."""
     # Fixed items for all configurations
-    items_to_assign = "nsrhldcmfpgwyb"  # 14 letters
-    items_assigned = "etaoiu"  # 6 letters
+    items_to_assign = "nsrhldcumfpgw"  # 13 letters
+    items_assigned = "etaoi"  # 5 letters
+    n_items_to_assign = len(items_to_assign)
     
     # Position constraints
     e_positions = ["D", "F"]
     t_positions = ["J", "K"]
-    # aoiu can be in any of the 20 most comfortable keys
-    aoiu_positions = list(ALL_KEYS)
+    # aoi can be in any of the most comfortable keys
+    aoi_positions = list(ALL_KEYS)
     
     # Generate all valid configurations
     configs = []
@@ -82,17 +96,17 @@ def generate_constraint_sets():
     # Loop through all possible position combinations
     for e_pos in e_positions:
         for t_pos in t_positions:
-            # Calculate remaining positions for a, o, i, u (excluding already assigned positions)
-            remaining_positions = [pos for pos in aoiu_positions if pos not in [e_pos, t_pos]]
+            # Calculate remaining positions for a, o, i (excluding already assigned positions)
+            remaining_positions = [pos for pos in aoi_positions if pos not in [e_pos, t_pos]]
             
-            # Generate all combinations of 4 positions from remaining_positions for a, o, i, u
-            for aoiu_combo in itertools.combinations(remaining_positions, 4):
-                # Generate all permutations of these 4 positions for a, o, i, u
-                for aoiu_perm in itertools.permutations(aoiu_combo):
-                    a_pos, o_pos, i_pos, u_pos = aoiu_perm
+            # Generate all combinations of 3 positions from remaining_positions for a, o, i
+            for aoi_combo in itertools.combinations(remaining_positions, 3):
+                # Generate all permutations of these 3 positions for a, o, i
+                for aoi_perm in itertools.permutations(aoi_combo):
+                    a_pos, o_pos, i_pos = aoi_perm
                     
                     # Create final position assignments
-                    positions = {'e': e_pos, 't': t_pos, 'a': a_pos, 'o': o_pos, 'i': i_pos, 'u': u_pos}
+                    positions = {'e': e_pos, 't': t_pos, 'a': a_pos, 'o': o_pos, 'i': i_pos}
                     
                     # Create the positions_assigned string (must match the order of items_assigned)
                     positions_assigned = ''.join([positions[letter] for letter in items_assigned])
@@ -102,7 +116,7 @@ def generate_constraint_sets():
                     positions_to_assign = ''.join([pos for pos in ALL_KEYS if pos not in used_positions])
                     
                     # Add to configs if valid and positions_to_assign has exactly 14 positions
-                    if len(positions_to_assign) == 14:
+                    if len(positions_to_assign) == n_items_to_assign:
                         configs.append({
                             'items_to_assign': items_to_assign,
                             'positions_to_assign': positions_to_assign,
@@ -173,8 +187,8 @@ if __name__ == "__main__":
     # Calculate the number of possible combinations 
     e_positions = 2  # D or F
     t_positions = 2  # J or K
-    top20_keys = 20
-    aoiu_positions = top20_keys - 2  # Excluding where e and t are placed
+    top_keys = len(ALL_KEYS)
+    aoiu_positions = top_keys - 2  # Excluding where e and t are placed
     aoiu_combinations = len(list(itertools.combinations(range(aoiu_positions), 4)))
     aoiu_permutations = 24  # 4! = 24 ways to arrange a,o,i,u
     
