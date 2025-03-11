@@ -5,73 +5,110 @@ Generate configuration files to run keyboard layout optimizations in parallel
 with specific letter-to-key constraints specified in each file.
 
 This is step 1 of:
-1. Generate layouts to see whether vowels aggregate on one side of the keyboard.
-2. Optimally arrange 20-letter layouts with vowels on the left.
-3. Optimally arrange letters in the least comfortable of 24 keys.
+1. Optimally arrange 20-letter layouts constraining the top 2 letters.
+2. Optimally arrange letters in the least comfortable of 24 keys.
 
 Constraints:
-- items_to_assign is always "nsrhldcumfpgw" (13 letters)
+- items_to_assign is always "nsrhldcumfpgwyb" (15 letters)
 - items_assigned is always "etaoi" (5 letters)
-- e will always be assigned to qwerty key D or F
-- t will always be assigned to qwerty key J or K
-- aoi can be in any of the 18 most comfortable keys: "FDSVERAWCJKLMIU;O,"
-- positions_to_assign: 13 of the remaining 18 keys
+- e: assigned to qwerty key D or F
+- t: any available key of the top 6 (most comfortable) keys: "FDSJKL"
+- aoi: any available keys of the top 16 keys: "FDSVERAWJKLMIU;O"
+- positions_to_assign: 15 remaining of the top 20 keys: "FDSVERAWCQJKLMIU;O,P"
 
-Step 1a: positions_assigned
----------------------------
-e in key D/F, t in key J/K:
+Step 1a: constrain e in positions_assigned
+-------------------------------------------------
+e in (qwerty) key D/F:
 ╭───────────────────────────────────────────────╮
 │     │     │     │     ║     │     │     │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
-│     │     │  D  │  F  ║  J  │  K  │     │     │
+│     │     │  D  │  F  ║     │     │     │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
 │     │     │     │     ║     │     │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-Step 1b: positions_assigned
----------------------------
-aoi in any of the top-18 (most comfortable) keys, 
+Step 1b: constrain t in positions_assigned
+-------------------------------------------------
+t in any of the top-6 (most comfortable) keys, 
+except where e is already assigned:
+╭───────────────────────────────────────────────╮
+│     │     │     │     ║     │     │     │     │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│     │  S  │  D  │  F  ║  J  │  K  │  L  │     │
+├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
+│     │     │     │     ║     │     │     │     │
+╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
+
+Step 1c: constrain aoi in positions_assigned
+-------------------------------------------------
+aoi in any of the top-16 keys, 
 except where e and t are already assigned:
 ╭───────────────────────────────────────────────╮
 │     │  W  │  E  │  R  ║  U  │  I  │  O  │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
 │  A  │  S  │  D  │  F  ║  J  │  K  │  L  │  ;  │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
-│     │     │  C  │  V  ║  M  │  ,  │     │     │
+│     │     │     │  V  ║  M  │     │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-Step 1c: positions_to_assign 
-----------------------------
-nsrhldcumfpgw in any remaining top-18 keys:
+Step 1d: assign 15 letters to positions_to_assign 
+-------------------------------------------------
+nsrhldcumfpgwyb (15 letters) in any remaining top-20 keys:
 ╭───────────────────────────────────────────────╮
-│     │  W  │  E  │  R  ║  U  │  I  │  O  │     │
+│  Q  │  W  │  E  │  R  ║  U  │  I  │  O  │  P  │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
 │  A  │  S  │  D  │  F  ║  J  │  K  │  L  │  ;  │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
 │     │     │  C  │  V  ║  M  │  ,  │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-There are 13,440 valid configurations based on the constraints.
+There are 21,840 valid configurations based on the constraints.
+(If taio were not constrained, there would be 186,048 valid configurations.)
 
 Example configuration:
   items_assigned: etaoi
-  positions_assigned: DJFSV
-  positions_to_assign: ERAWCKLMIU;O,
+  positions_assigned: FDSVE
+  positions_to_assign: RAWCQJKLMIU;O,P
   Letter mappings:
-    e -> D
-    t -> J
-    a -> F
-    o -> S
-    i -> V
+    e -> F
+    t -> D
+    a -> S
+    o -> V
+    i -> E
+
+To run in parallel on SLURM with a max array size of 1000:
+sbatch --array=1-1000%1000 run_parallel_optimizations.sh
+sbatch --array=1001-2000%1000 run_parallel_optimizations.sh
+sbatch --array=2001-3000%1000 run_parallel_optimizations.sh
+sbatch --array=3001-4000%1000 run_parallel_optimizations.sh
+sbatch --array=4001-5000%1000 run_parallel_optimizations.sh
+sbatch --array=5001-6000%1000 run_parallel_optimizations.sh
+sbatch --array=6001-7000%1000 run_parallel_optimizations.sh
+sbatch --array=7001-8000%1000 run_parallel_optimizations.sh
+sbatch --array=8001-9000%1000 run_parallel_optimizations.sh
+sbatch --array=9001-10000%1000 run_parallel_optimizations.sh
+sbatch --array=10001-11000%1000 run_parallel_optimizations.sh
+sbatch --array=11001-12000%1000 run_parallel_optimizations.sh
+sbatch --array=12001-13000%1000 run_parallel_optimizations.sh
+sbatch --array=13001-14000%1000 run_parallel_optimizations.sh
+sbatch --array=14001-15000%1000 run_parallel_optimizations.sh
+sbatch --array=15001-16000%1000 run_parallel_optimizations.sh
+sbatch --array=16001-17000%1000 run_parallel_optimizations.sh
+sbatch --array=17001-18000%1000 run_parallel_optimizations.sh
+sbatch --array=18001-19000%1000 run_parallel_optimizations.sh
+sbatch --array=19001-20000%1000 run_parallel_optimizations.sh
+sbatch --array=20001-21000%1000 run_parallel_optimizations.sh
+sbatch --array=21001-21840%1000 run_parallel_optimizations.sh
 
 """
 import os
 import yaml
+import math
 import itertools
 
 # Configuration
 OUTPUT_DIR = 'configs'
-ALL_KEYS = "FDSVERAWCJKLMIU;O,"  # 18 most comfortable keys
+ALL_KEYS = "FDSVERAWCQJKLMIU;O,P"  # 20 most comfortable keys
 
 # Base configuration from the original config file
 with open('config.yaml', 'r') as f:
@@ -80,22 +117,23 @@ with open('config.yaml', 'r') as f:
 def generate_constraint_sets():
     """Generate all valid configurations based on the constraints."""
     # Fixed items for all configurations
-    items_to_assign = "nsrhldcumfpgw"  # 13 letters
-    items_assigned = "etaoi"  # 5 letters
+    items_assigned  = "etaoi"            #  5 letters
+    items_to_assign = "nsrhldcumfpgwyb"  # 15 letters
     n_items_to_assign = len(items_to_assign)
     
     # Position constraints
-    e_positions = ["D", "F"]
-    t_positions = ["J", "K"]
-    # aoi can be in any of the most comfortable keys
-    aoi_positions = list(ALL_KEYS)
+    e_positions   = ["F","D"]
+    t_positions   = ["F","D","S", 
+                     "J","K","L"]
+    aoi_positions = ["F","D","S","V","E","R","A","W",
+                     "J","K","L","M","I","U",";","O"]
     
     # Generate all valid configurations
     configs = []
     
     # Loop through all possible position combinations
     for e_pos in e_positions:
-        for t_pos in t_positions:
+        for t_pos in [pos for pos in t_positions if pos != e_pos]:
             # Calculate remaining positions for a, o, i (excluding already assigned positions)
             remaining_positions = [pos for pos in aoi_positions if pos not in [e_pos, t_pos]]
             
@@ -115,7 +153,7 @@ def generate_constraint_sets():
                     used_positions = set(positions_assigned)
                     positions_to_assign = ''.join([pos for pos in ALL_KEYS if pos not in used_positions])
                     
-                    # Add to configs if valid and positions_to_assign has exactly 14 positions
+                    # Add to configs if valid and positions_to_assign has the correct number of positions
                     if len(positions_to_assign) == n_items_to_assign:
                         configs.append({
                             'items_to_assign': items_to_assign,
@@ -128,7 +166,7 @@ def generate_constraint_sets():
     
     return configs
 
-def create_config_files(configs):
+def create_config_files(configs, nlayouts=100):
     """Create individual config file for each configuration."""
     # Create output directory
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -144,8 +182,8 @@ def create_config_files(configs):
         for param, value in config_params.items():
             config['optimization'][param] = value
         
-        # Set nlayouts to 100
-        config['optimization']['nlayouts'] = 100
+        # Set nlayouts
+        config['optimization']['nlayouts'] = nlayouts
         
         # Set up unique output path
         #config['paths']['output']['layout_results_folder'] = f"output/layouts/config_{i}"
@@ -161,14 +199,15 @@ def create_config_files(configs):
             print(f"  Created {i}/{len(configs)} configuration files...")
         
 if __name__ == "__main__":
+    nlayouts = 100
     print("Generating keyboard layout configurations...")
     configs = generate_constraint_sets()
     print(f"Found {len(configs)} valid configurations based on the constraints.")
-    create_config_files(configs)
+    create_config_files(configs, nlayouts)
     print(f"All configuration files have been generated in the '{OUTPUT_DIR}' directory.")
     
     # Print details about the first few configs
-    num_examples = min(5, len(configs))
+    num_examples = min(3, len(configs))
     print(f"\nShowing details for first {num_examples} configurations:")
     for i in range(num_examples):
         config = configs[i]
@@ -185,13 +224,10 @@ if __name__ == "__main__":
             print(f"    {letter} -> {pos}")
             
     # Calculate the number of possible combinations 
-    e_positions = 2  # D or F
-    t_positions = 2  # J or K
-    top_keys = len(ALL_KEYS)
-    aoiu_positions = top_keys - 2  # Excluding where e and t are placed
-    aoiu_combinations = len(list(itertools.combinations(range(aoiu_positions), 4)))
-    aoiu_permutations = 24  # 4! = 24 ways to arrange a,o,i,u
+    e_positions = 2
+    t_valid_positions = 5  # 6 keys minus 1 where e is placed
+    aoi_combinations = math.comb(14, 3)  # 364 ways to choose 3 from 14
+    aoi_permutations = 6  # 3! = 6 ways to arrange a,o,i
     
-    print(f"\nTheoretical maximum configurations: {e_positions * t_positions * aoiu_combinations * aoiu_permutations}")
+    print(f"\nTheoretical maximum configurations: {e_positions * t_valid_positions * aoi_combinations * aoi_permutations}")
     print(f"Actual configurations: {len(configs)}")
-    print("Note: The actual number is lower due to filtering out invalid combinations")

@@ -108,6 +108,8 @@ git clone https://github.com/binarybottle/optimize_layouts.git
 mkdir -p optimize_layouts
 mkdir -p optimize_layouts/input
 mkdir -p optimize_layouts/output/layouts
+mkdir -p optimize_layouts/output/outputs
+mkdir -p optimize_layouts/output/errors
 ```
 
 ### Install required Python packages
@@ -141,6 +143,9 @@ sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' run_parallel_optimizations.sh
 
 # Submit the job to the scheduler
 sbatch run_parallel_optimizations.sh
+
+# Or set the array size from the command line:
+sbatch --array=1-1000%1000 run_parallel_optimizations.sh
 ```
 
 ### Monitoring jobs
@@ -156,12 +161,18 @@ squeue -j <job_array_id> | awk '{print $5}' | sort | uniq -c
 
 # View detailed information about a job
 scontrol show job <job_id>
-
-# Check estimated start time for pending jobs
-squeue -j <job_array_id> --start
 ```
 
-### Resumine failed jobs
+### Cancel jobs
+```
+# Cancel a specific job ID
+scancel 29556406_1
+
+# Cancel all your jobs at once
+scancel -u $USER
+```
+
+### Resume failed jobs
 ```
 # Create a list of failed job indices
 find output/layouts -name "job_failed.txt" | grep -o "config_[0-9]*" | cut -d'_' -f2 > failed_jobs.txt

@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --time=08:00:00            # Time limit (max hours per job)
-#SBATCH --array=1-2%2              # Job array: #configs %simultaneous jobs # trial: 1-2%2 configs1: 1-13440%100 configs2: 1-12096%100
+#SBATCH --array=1-10000%1000       # Job array: #configs %simultaneous jobs
 #SBATCH --ntasks-per-node=1        # Run one task per job
 #SBATCH --cpus-per-task=2          # Cores per optimization process
 #SBATCH --mem=2GB                  # Memory per job
 #SBATCH --job-name=layouts         # Job name
-#SBATCH --output=layouts_%A_%a.out # Output file with job and array IDs
-#SBATCH --error=layouts_%A_%a.err  # Error file with job and array IDs
+#SBATCH --output=output/outputs/layouts_%A_%a.out # Output file with job and array IDs
+#SBATCH --error=output/errors/layouts_%A_%a.err   # Error file with job and array IDs
 #SBATCH -p RM-shared               # Partition (queue) - use shared to save SUs
 #SBATCH -A <YOUR_ALLOCATION_ID>    # Replace with your allocation ID
 
