@@ -201,6 +201,8 @@ def find_layout_results(step1_dir, layouts_per_config=1):
 def generate_constraint_sets(layouts):
     """Generate configurations based on top-scoring layouts from Step #1."""
     configs = []
+    unique_item_sets = set()  # Track unique sets of letters in most comfortable keys
+    duplicates_count = 0      # Track number of duplicates found
     
     for layout in layouts:
         # Extract items and positions from the layout
@@ -221,6 +223,17 @@ def generate_constraint_sets(layouts):
         
         # Identify items in the most/least comfortable keys
         items_in_most_comfortable = ''.join([pos_to_item.get(pos, '') for pos in MOST_COMFORTABLE_KEYS])
+        
+        # Check if we've already seen this set of most comfortable letters
+        items_key = ''.join(sorted(items_in_most_comfortable))
+        if items_key in unique_item_sets:
+            # Skip this layout as it would produce a duplicate config
+            duplicates_count += 1
+            continue
+        
+        # Add to our set of unique letter combinations
+        unique_item_sets.add(items_key)
+        
         items_in_least_comfortable = ''.join([pos_to_item.get(pos, '') for pos in LEAST_COMFORTABLE_KEYS])
         
         # Add vkxj to items_to_assign (as specified in the docstring)
@@ -265,6 +278,7 @@ def generate_constraint_sets(layouts):
                     configs.append(config)
                     print("  Configuration fixed and added.")
     
+    print(f"Skipped {duplicates_count} duplicate configurations")
     return configs
 
 def create_config_files(configs, output_subdir=""):
@@ -376,7 +390,7 @@ if __name__ == "__main__":
         
         print(f"\nTaking top {len(top_layouts)} layouts across all {len(all_layouts)} layouts from Step #1")
         
-        # Generate configurations from top N layouts
+        # Generate configurations from top N layouts (with duplicate prevention)
         configs_across_all = generate_constraint_sets(top_layouts)
         print(f"Generated {len(configs_across_all)} valid configurations using across-all approach")
         
@@ -385,19 +399,3 @@ if __name__ == "__main__":
         create_config_files(configs_across_all, output_subdir="across_all")
     
     print(f"\nAll configuration files have been generated in the '{OUTPUT_DIR}' directory.")
-    
-    # Print usage example for the run_parallel_optimizations.sh script
-    print("\nTo run these configurations in parallel, update your run_parallel_optimizations.sh script with:")
-    if args.both_approaches:
-        print("For per-config approach:")
-        print(f"  #SBATCH --array=1-{len(configs_per_config)}%100")
-        print("  config_filename=\"configs/per_config/step2_from_config_${SLURM_ARRAY_TASK_ID}_*.yaml\"")
-        print("\nFor across-all approach:")
-        print(f"  #SBATCH --array=1-{len(configs_across_all)}%100")
-        print("  config_filename=\"configs/across_all/step2_top_${SLURM_ARRAY_TASK_ID}.yaml\"")
-    elif args.top_across_all > 0:
-        print(f"  #SBATCH --array=1-{len(configs_across_all)}%100")
-        print("  config_filename=\"configs/across_all/step2_top_${SLURM_ARRAY_TASK_ID}.yaml\"")
-    else:
-        print(f"  #SBATCH --array=1-{len(configs_per_config)}%100")
-        print("  config_filename=\"configs/per_config/step2_from_config_${SLURM_ARRAY_TASK_ID}_*.yaml\"")
