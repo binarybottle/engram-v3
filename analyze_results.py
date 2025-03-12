@@ -113,14 +113,9 @@ def parse_result_csv(filepath):
                 # Extract file identifier - this will be used for exact matching
                 file_id = os.path.basename(filepath)
                 
-                # Extract assigned letters from filename if it has the pattern "etuXYZ"
-                # where XYZ are positions for e, t, u
-                assigned_items = ""
-                assigned_positions = ""
-                filename_match = re.search(r'etu([A-Z]+)', os.path.basename(filepath))
-                if filename_match:
-                    assigned_items = "etu"
-                    assigned_positions = filename_match.group(1)
+                # Get assigned items/positions from the config_info if available
+                assigned_items = config_info.get('items_assigned', '')
+                assigned_positions = config_info.get('positions_assigned', '')
                 
                 result = {
                     'items': items,
@@ -131,10 +126,10 @@ def parse_result_csv(filepath):
                     'item_score': item_score,
                     'item_pair_score': item_pair_score,
                     'file_id': file_id,
-                    'assigned_items': assigned_items,
-                    'assigned_positions': assigned_positions
+                    'items_assigned': assigned_items,
+                    'positions_assigned': assigned_positions
                 }
-                
+
                 # Extract config ID from filepath - use the full basename to avoid duplicates
                 config_id = os.path.basename(filepath).replace('layout_results_', '').replace('.csv', '')
                 result['config_id'] = config_id
@@ -222,13 +217,15 @@ def create_visualization_mapping(row):
         if i < len(positions):
             mapping[letter] = positions[i]
     
-    # If there are assigned items in the filename (like "etu"),
-    # make sure they are included in the mapping
-    if row.get('assigned_items') and row.get('assigned_positions'):
-        for i, letter in enumerate(row['assigned_items']):
-            if i < len(row['assigned_positions']):
-                # Don't add to mapping - these should be handled by the config
-                pass
+    # Include any assigned items if they're present in the data
+    # (not depending on filename pattern)
+    if 'items_assigned' in row and 'positions_assigned' in row:
+        items_assigned = row['items_assigned']
+        positions_assigned = row['positions_assigned']
+        
+        for i, letter in enumerate(items_assigned):
+            if i < len(positions_assigned):
+                mapping[letter] = positions_assigned[i]
     
     return mapping
 
