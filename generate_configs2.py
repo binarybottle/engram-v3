@@ -61,7 +61,7 @@ with open('config.yaml', 'r') as f:
 
 def parse_layout_results(results_path, top_n=1):
     """
-    Parse layout results files to extract the top N layouts from Step #2.
+    Parse layout results files to extract the top N layouts from Step #1.
     
     Args:
         results_path: Path to CSV file with layout results
@@ -113,12 +113,12 @@ def parse_layout_results(results_path, top_n=1):
         print(f"Error parsing {results_path}: {e}")
         return layouts
 
-def find_layout_results(step2_dir, layouts_per_config=1):
+def find_layout_results(step1_dir, layouts_per_config=1):
     """
-    Find layout result files from Step #2, taking the top N layouts from each config.
+    Find layout result files from Step #1, taking the top N layouts from each config.
     
     Args:
-        step2_dir: Directory containing Step #2 results
+        step1_dir: Directory containing Step #1 results
         layouts_per_config: Number of top layouts to take from each config file
         
     Returns:
@@ -128,14 +128,14 @@ def find_layout_results(step2_dir, layouts_per_config=1):
     # Group result files by config number
     config_results = defaultdict(list)
     
-    pattern = os.path.join(step2_dir, "config_*/layout_results_*.csv")
+    pattern = os.path.join(step1_dir, "config_*/layout_results_*.csv")
     result_files = glob.glob(pattern)
     
     if not result_files:
-        print(f"No layout result files found in {step2_dir}")
+        print(f"No layout result files found in {step1_dir}")
         return results
     
-    print(f"Found {len(result_files)} result files from Step #2")
+    print(f"Found {len(result_files)} result files from Step #1")
     
     # First, organize files by config number
     for file_path in result_files:
@@ -145,7 +145,7 @@ def find_layout_results(step2_dir, layouts_per_config=1):
         except (IndexError, ValueError) as e:
             print(f"Warning: Could not extract config number from {file_path}: {e}")
     
-    print(f"Found results for {len(config_results)} different Step #2 configurations")
+    print(f"Found results for {len(config_results)} different Step #1 configurations")
     
     # Process each config's results
     for config_num, file_paths in config_results.items():
@@ -199,7 +199,7 @@ def find_layout_results(step2_dir, layouts_per_config=1):
     return results
 
 def generate_constraint_sets(layouts):
-    """Generate configurations based on top-scoring layouts from Step #2."""
+    """Generate configurations based on top-scoring layouts from Step #1."""
     configs = []
     
     for layout in layouts:
@@ -296,12 +296,12 @@ def create_config_files(configs, output_subdir=""):
             source_rank = config_params.get('source_rank', 1)
             
             # Set up unique output path based on source config
-            output_folder = f"output/layouts/step3_per_config/from_config_{source_config}_rank_{source_rank}"
-            config_filename = f"{output_dir}/step3_from_config_{source_config}_rank_{source_rank}.yaml"
+            output_folder = f"output/layouts/step2_per_config/from_config_{source_config}_rank_{source_rank}"
+            config_filename = f"{output_dir}/step2_from_config_{source_config}_rank_{source_rank}.yaml"
         else:
             # Across-all approach - use top N naming
-            output_folder = f"output/layouts/step3_across_all/top_{i}"
-            config_filename = f"{output_dir}/step3_top_{i}.yaml"
+            output_folder = f"output/layouts/step2_across_all/top_{i}"
+            config_filename = f"{output_dir}/step2_top_{i}.yaml"
         
         # Set output folder in config
         #config['paths']['output']['layout_results_folder'] = output_folder
@@ -317,24 +317,24 @@ def create_config_files(configs, output_subdir=""):
         
 if __name__ == "__main__":
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Generate Step #3 configurations from Step #2 results.')
-    parser.add_argument('--step2-dir', type=str, default='output/layouts',
-                        help='Directory containing Step #2 layout results')
+    parser = argparse.ArgumentParser(description='Generate Step #2 configurations from Step #1 results.')
+    parser.add_argument('--step1-dir', type=str, default='output/layouts',
+                        help='Directory containing Step #1 layout results')
     parser.add_argument('--layouts-per-config', type=int, default=1,
-                        help='Number of top layouts to take from each Step #2 config (default: 1)')
+                        help='Number of top layouts to take from each Step #1 config (default: 1)')
     parser.add_argument('--top-across-all', type=int, default=100,
-                        help='Number of top layouts to take across all Step #2 configs (default: 100)')
+                        help='Number of top layouts to take across all Step #1 configs (default: 100)')
     parser.add_argument('--both-approaches', action='store_true',
                         help='Generate configs using both per-config and across-all approaches')
     args = parser.parse_args()
 
-    print("Step 3: Generating keyboard layout configurations for least comfortable keys...")
+    print("Step 2: Generating keyboard layout configurations for least comfortable keys...")
     
-    # Find layout results from Step #2, taking the top N layouts from each config
-    layouts_per_config = find_layout_results(args.step2_dir, args.layouts_per_config)
+    # Find layout results from Step #1, taking the top N layouts from each config
+    layouts_per_config = find_layout_results(args.step1_dir, args.layouts_per_config)
     
     if not layouts_per_config:
-        print("Error: No layout results found from Step #2")
+        print("Error: No layout results found from Step #1")
         sys.exit(1)
     
     # Generate configurations from per-config layouts
@@ -342,7 +342,7 @@ if __name__ == "__main__":
     
     # Group layouts by config number for reporting
     configs_represented = len({layout['config'] for layout in layouts_per_config})
-    print(f"Found {len(layouts_per_config)} layouts from {configs_represented} Step #2 configurations")
+    print(f"Found {len(layouts_per_config)} layouts from {configs_represented} Step #1 configurations")
     print(f"Generated {len(configs_per_config)} valid configurations using per-config approach")
     
     # Create directories for different approaches
@@ -359,7 +359,7 @@ if __name__ == "__main__":
     if args.both_approaches or args.top_across_all > 0:
         # Get top N layouts across all configs
         all_layouts = []
-        for file_path in glob.glob(os.path.join(args.step2_dir, "config_*/layout_results_*.csv")):
+        for file_path in glob.glob(os.path.join(args.step1_dir, "config_*/layout_results_*.csv")):
             config_layouts = parse_layout_results(file_path, top_n=100)  # Get many layouts from each file
             for layout in config_layouts:
                 try:
@@ -374,7 +374,7 @@ if __name__ == "__main__":
         all_layouts.sort(key=lambda x: x['score'], reverse=True)
         top_layouts = all_layouts[:args.top_across_all]
         
-        print(f"\nTaking top {len(top_layouts)} layouts across all {len(all_layouts)} layouts from Step #2")
+        print(f"\nTaking top {len(top_layouts)} layouts across all {len(all_layouts)} layouts from Step #1")
         
         # Generate configurations from top N layouts
         configs_across_all = generate_constraint_sets(top_layouts)
@@ -391,37 +391,13 @@ if __name__ == "__main__":
     if args.both_approaches:
         print("For per-config approach:")
         print(f"  #SBATCH --array=1-{len(configs_per_config)}%100")
-        print("  config_filename=\"configs/per_config/step3_from_config_${SLURM_ARRAY_TASK_ID}_*.yaml\"")
+        print("  config_filename=\"configs/per_config/step2_from_config_${SLURM_ARRAY_TASK_ID}_*.yaml\"")
         print("\nFor across-all approach:")
         print(f"  #SBATCH --array=1-{len(configs_across_all)}%100")
-        print("  config_filename=\"configs/across_all/step3_top_${SLURM_ARRAY_TASK_ID}.yaml\"")
+        print("  config_filename=\"configs/across_all/step2_top_${SLURM_ARRAY_TASK_ID}.yaml\"")
     elif args.top_across_all > 0:
         print(f"  #SBATCH --array=1-{len(configs_across_all)}%100")
-        print("  config_filename=\"configs/across_all/step3_top_${SLURM_ARRAY_TASK_ID}.yaml\"")
+        print("  config_filename=\"configs/across_all/step2_top_${SLURM_ARRAY_TASK_ID}.yaml\"")
     else:
         print(f"  #SBATCH --array=1-{len(configs_per_config)}%100")
-        print("  config_filename=\"configs/per_config/step3_from_config_${SLURM_ARRAY_TASK_ID}_*.yaml\"")
-
-    
-    # Create config files
-    create_config_files(configs)
-    
-    print(f"All configuration files have been generated in the '{OUTPUT_DIR}' directory.")
-    
-    # Print details about the first few configs
-    num_examples = min(5, len(configs))
-    print(f"\nShowing details for first {num_examples} configurations:")
-    for i in range(num_examples):
-        config = configs[i]
-        print(f"\nConfig {i+1}:")
-        print(f"  items_assigned: {config['items_assigned']}")
-        print(f"  positions_assigned: {config['positions_assigned']}")
-        print(f"  items_to_assign: {config['items_to_assign']}")
-        print(f"  positions_to_assign: {config['positions_to_assign']}")
-        
-        # Map letters to positions for clarity
-        letter_positions = {config['items_assigned'][j]: config['positions_assigned'][j] 
-                          for j in range(len(config['items_assigned']))}
-        print("  Letter mappings (most comfortable keys):")
-        for letter, pos in letter_positions.items():
-            print(f"    {letter} -> {pos}")
+        print("  config_filename=\"configs/per_config/step2_from_config_${SLURM_ARRAY_TASK_ID}_*.yaml\"")
