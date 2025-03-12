@@ -4,35 +4,21 @@
 Generate configuration files to run keyboard layout optimizations in parallel 
 with specific letter-to-key constraints specified in each file.
 
-This is step 3 of:
-1. Generate layouts to see whether vowels aggregate on one side of the keyboard.
-2. Optimally arrange 20-letter layouts with vowels on the left.
-3. Optimally arrange letters in the least comfortable of 24 keys.
+This is step 2 of:
+1. Optimally arrange letters in the most comfortable 20 keys.
+2. Optimally arrange letters in the least comfortable of 24 keys.
 
 Constraints:
 - positions_assigned: 10 most comfortable keys: FDSVE JKLMI
 - positions_to_assign: 14 least comfortable keys: RAWCQXZ U;O,P./
 - items_assigned: letters assigned to the 10 most comfortable keys 
-  in the top-scoring layout for each process run in Step #2
-  and the top-scoring layouts across all processes run in Step #2
+  in the top-scoring layout for each process run in Step 1
+  and the top-scoring layouts across all processes run in Step 1
 - items_to_assign: vkxj and 10 letters assigned to the least comfortable keys 
-  in the top-scoring layout for each process run in Step #2
-  and the top-scoring layouts across all processes run in Step #2
+  in the top-scoring layout for each process run in Step 1
+  and the top-scoring layouts across all processes run in Step 1
   
-Step 3a: positions_assigned
----------------------------
-10 most comfortable keys:
-╭───────────────────────────────────────────────╮
-│     │     │  E  │     ║     │  I  │     │     │
-├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
-│     │  S  │  D  │  F  ║  J  │  K  │  L  │     │
-├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
-│     │     │     │  V  ║  M  │     │     │     │
-╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
-
-Step 3b: positions_to_assign 
-----------------------------
-14 least comfortable keys:
+Score every permutation of letters from Step 1 in the 14 least comfortable keys:
 ╭───────────────────────────────────────────────╮
 │  Q  │  W  │     │  R  ║  U  │     │  O  │  P  │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
@@ -41,17 +27,19 @@ Step 3b: positions_to_assign
 │  Z  │  X  │  C  │     ║     │  ,  │  .  │  /  │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-# Generate using both approaches (default settings)
-python generate_configs3_bottom20of24.py --both-approaches
+# Generate using both approaches (with default settings)
+python generate_configs2.py --both-approaches
 
-# Just use per-config approach (1 layout per Step #2 config)
-python generate_configs3_bottom20of24.py
+# Just use per-config approach (1 layout per Step 1 config)
+python generate_configs2.py
 
-# Just use across-all approach (top 100 layouts across all Step #2 configs)
-python generate_configs3_bottom20of24.py --top-across-all 100
+# Just use across-all approach (top 100 layouts across all Step 1 configs)
+python generate_configs2.py --top-across-all 100
 
 # Custom settings
-python generate_configs3_bottom20of24.py --both-approaches --layouts-per-config 1 --top-across-all 1000
+python generate_configs2.py --both-approaches --layouts-per-config 1 --top-across-all 1000
+
+See README for information on how to run batches of config files in parallel.
 
 """
 import os

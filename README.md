@@ -131,7 +131,8 @@ cd ~/keyboard_optimizer/optimize_layouts
 
 # Make the scripts executable
 #chmod +x generate_configs.py
-chmod +x run_parallel_optimizations.sh
+chmod +x slurm_batchmaking.sh
+chmod +x slurm_submit_batches.sh
 
 # Generate configuration files
 #python generate_configs.py
@@ -139,13 +140,13 @@ chmod +x run_parallel_optimizations.sh
 # Replace <YOUR_ALLOCATION_ID> with your actual allocation ID
 # In the code below, replace abc123 with your allocation ID
 # (you can find this using the 'projects' command):
-sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' run_parallel_optimizations.sh
+sed -i 's/<YOUR_ALLOCATION_ID>/abc123/g' slurm_batchmaking.sh
 
 # Submit the job to the scheduler
-sbatch run_parallel_optimizations.sh
+sbatch slurm_submit_batches.sh
 
-# Or set the array size from the command line:
-sbatch --array=1-1000%1000 run_parallel_optimizations.sh
+# Alternatively, if you want to run just one batch (1001-2000) manually:
+sbatch --export=BATCH_NUM=1 slurm_batchmaking.sh
 ```
 
 ### Monitoring jobs
@@ -170,15 +171,6 @@ scancel 29556406_1
 
 # Cancel all your jobs at once
 scancel -u $USER
-```
-
-### Resume failed jobs
-```
-# Create a list of failed job indices
-find output/layouts -name "job_failed.txt" | grep -o "config_[0-9]*" | cut -d'_' -f2 > failed_jobs.txt
-
-# Submit only the failed jobs
-sbatch --array=$(tr '\n' ',' < failed_jobs.txt) run_keyboard_optimization.sh
 ```
 
 ### Analyze the results

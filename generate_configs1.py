@@ -5,20 +5,18 @@ Generate configuration files to run keyboard layout optimizations in parallel
 with specific letter-to-key constraints specified in each file.
 
 This is step 1 of:
-1. Optimally arrange 20-letter layouts constraining the top 2 letters.
+1. Optimally arrange letters in the most comfortable 20 keys.
 2. Optimally arrange letters in the least comfortable of 24 keys.
 
 Constraints:
 - items_to_assign is always "nsrhldcumfpgwyb" (15 letters)
 - items_assigned is always "etaoi" (5 letters)
 - e: assigned to qwerty key D or F
-- t: any available key of the top 6 (most comfortable) keys: "FDSJKL"
-- aoi: any available keys of the top 16 keys: "FDSVERAWJKLMIU;O"
+- t: any available key in the top 6 (most comfortable) keys: "FDSJKL"
+- aoi: any available keys in the top 16 keys: "FDSVERAWJKLMIU;O"
 - positions_to_assign: 15 remaining of the top 20 keys: "FDSVERAWCQJKLMIU;O,P"
 
-Step 1a: constrain e in positions_assigned
--------------------------------------------------
-e in (qwerty) key D/F:
+Step 1a: Assign e to the top-2 (most comfortable) left qwerty keys, D or F:
 ╭───────────────────────────────────────────────╮
 │     │     │     │     ║     │     │     │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
@@ -27,10 +25,7 @@ e in (qwerty) key D/F:
 │     │     │     │     ║     │     │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-Step 1b: constrain t in positions_assigned
--------------------------------------------------
-t in any of the top-6 (most comfortable) keys, 
-except where e is already assigned:
+Step 1b: Assign t to any available top-6 keys:
 ╭───────────────────────────────────────────────╮
 │     │     │     │     ║     │     │     │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
@@ -39,10 +34,7 @@ except where e is already assigned:
 │     │     │     │     ║     │     │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-Step 1c: constrain aoi in positions_assigned
--------------------------------------------------
-aoi in any of the top-16 keys, 
-except where e and t are already assigned:
+Step 1c: Assign aoi to any available top-16 keys:
 ╭───────────────────────────────────────────────╮
 │     │  W  │  E  │  R  ║  U  │  I  │  O  │     │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
@@ -51,9 +43,7 @@ except where e and t are already assigned:
 │     │     │     │  V  ║  M  │     │     │     │
 ╰─────┴─────┴─────┴─────╨─────┴─────┴─────┴─────╯
 
-Step 1d: assign 15 letters to positions_to_assign 
--------------------------------------------------
-nsrhldcumfpgwyb (15 letters) in any remaining top-20 keys:
+Step 1d: Assign next most frequent 15 letters to any remaining top-20 keys: 
 ╭───────────────────────────────────────────────╮
 │  Q  │  W  │  E  │  R  ║  U  │  I  │  O  │  P  │
 ├─────┼─────┼─────┼─────╫─────┼─────┼─────┼─────┤
@@ -76,29 +66,7 @@ Example configuration:
     o -> V
     i -> E
 
-To run in parallel on SLURM with a max array size of 1000:
-sbatch --array=1-1000%1000 run_parallel_optimizations.sh
-sbatch --array=1001-2000%1000 run_parallel_optimizations.sh
-sbatch --array=2001-3000%1000 run_parallel_optimizations.sh
-sbatch --array=3001-4000%1000 run_parallel_optimizations.sh
-sbatch --array=4001-5000%1000 run_parallel_optimizations.sh
-sbatch --array=5001-6000%1000 run_parallel_optimizations.sh
-sbatch --array=6001-7000%1000 run_parallel_optimizations.sh
-sbatch --array=7001-8000%1000 run_parallel_optimizations.sh
-sbatch --array=8001-9000%1000 run_parallel_optimizations.sh
-sbatch --array=9001-10000%1000 run_parallel_optimizations.sh
-sbatch --array=10001-11000%1000 run_parallel_optimizations.sh
-sbatch --array=11001-12000%1000 run_parallel_optimizations.sh
-sbatch --array=12001-13000%1000 run_parallel_optimizations.sh
-sbatch --array=13001-14000%1000 run_parallel_optimizations.sh
-sbatch --array=14001-15000%1000 run_parallel_optimizations.sh
-sbatch --array=15001-16000%1000 run_parallel_optimizations.sh
-sbatch --array=16001-17000%1000 run_parallel_optimizations.sh
-sbatch --array=17001-18000%1000 run_parallel_optimizations.sh
-sbatch --array=18001-19000%1000 run_parallel_optimizations.sh
-sbatch --array=19001-20000%1000 run_parallel_optimizations.sh
-sbatch --array=20001-21000%1000 run_parallel_optimizations.sh
-sbatch --array=21001-21840%1000 run_parallel_optimizations.sh
+See README for information on how to run batches of config files in parallel.
 
 """
 import os
